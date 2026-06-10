@@ -5,15 +5,31 @@ from discord.ext import commands
 from config import Config  # Imports our central configuration setup
 
 # 1. Initialize Bot Intents
-# Intents act as permissions telling Discord what events your bot should receive.
 intents = discord.Intents.default()
 intents.message_content = True  # Required for !commands, !say, !reply, and !snipe
 intents.members = True          # Required for on_member_join, logs, kicks, and bans
 
-# 2. Instantiate the Bot instance
-bot = commands.Bot(command_prefix=Config.PREFIX, intents=intents)
+# --- NEW: SUBCLASSING BOT TO ADD PERSISTENT VIEWS ---
+# We create a custom class so we can use `setup_hook`. 
+# This ensures buttons keep working after a bot restart.
+class ConfessionBot(commands.Bot):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
 
-# 3. Connection Lifecyle Listener
+    async def setup_hook(self):
+        # We import the Views here to prevent circular import issues
+        # (Change 'cogs.confessions' to whatever your confession file path is)
+        from cogs.confessions import ConfessionSubmitView, ConfessionApprovalView
+        
+        # Register the views so they handle button interactions globally
+        self.add_view(ConfessionSubmitView())
+        self.add_view(ConfessionApprovalView())
+        print("Registered persistent confession views successfully!")
+
+# 2. Instantiate the Bot instance (Updated to use our new class)
+bot = ConfessionBot(command_prefix=Config.PREFIX, intents=intents)
+
+# 3. Connection Lifecycle Listener
 @bot.event
 async def on_ready():
     print("==================================================")
@@ -24,7 +40,6 @@ async def on_ready():
 
 # 4. Asynchronous Extension/Cog Loader
 async def load_extensions():
-    # Defensive check: automatically verify if the cogs directory exists
     if not os.path.exists("./cogs"):
         os.makedirs("./cogs")
         print("'cogs/' directory was missing. Generated empty module folder.")
@@ -33,7 +48,6 @@ async def load_extensions():
     print("Initializing extension loaders...")
     for filename in os.listdir("./cogs"):
         if filename.endswith(".py"):
-            # Strip the '.py' file extension to import as a dot-notation module path
             cog_module = f"cogs.{filename[:-3]}"
             try:
                 await bot.load_extension(cog_module)
@@ -45,17 +59,14 @@ async def load_extensions():
 # 5. Core Runtime Entry Point
 async def main():
     async with bot:
-        # Load your cogs before invoking connection methods
         await load_extensions()
         
-        # Guard clause: make sure the token isn't blank or missing from your environment variables
         if not Config.TOKEN or Config.TOKEN == "your_actual_bot_token_here":
             raise ValueError(
                 "CRITICAL ERROR: No valid DISCORD_TOKEN found inside your hidden .env file! "
                 "Ensure your token is set up correctly."
             )
             
-        # Start connection sequence
         await bot.start(Config.TOKEN)
 
 if __name__ == "__main__":
