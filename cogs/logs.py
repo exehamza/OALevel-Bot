@@ -1,6 +1,6 @@
 import asyncio
 from collections import defaultdict, deque
-
+from datetime import datetime, timezone
 import discord
 from discord.ext import commands
 
@@ -153,30 +153,39 @@ class Logs(commands.Cog):
                 embed.set_timestamp()
                 await log_channel.send(embed=embed)
 
-    # Kicks don't have a direct on_member_kick event listener,
-    # instead we monitor members leaving the server and cross-reference the audit log!
-    @commands.Cog.listener()
-    async def on_member_remove(self, member):
-        log_channel = await self.get_log_channel(member.guild)
-        if not log_channel:
-            return
+# Kicks don't have a direct on_member_kick event listener,
+# instead we monitor members leaving the server and cross-reference the audit log!
+@commands.Cog.listener()
+async def on_member_remove(self, member):
+    log_channel = await self.get_log_channel(member.guild)
+    if not log_channel:
+        return
 
-        # Wait a tiny fraction of a second to allow Discord to write the audit log entry
-        await asyncio.sleep(0.5)
+    # Wait a tiny fraction of a second to allow Discord to write the audit log entry
+    await asyncio.sleep(2)
 
-        try:
-            async for entry in member.guild.audit_logs(action=discord.AuditLogAction.kick, limit=1):
-                # Check if the kicked user matches the member who just left, and check timing
-                if entry.target.id == member.id:
+    try:
+        async for entry in member.guild.audit_logs(action=discord.AuditLogAction.kick, limit=1):
+            # 1. Check if the kicked user matches the member who just left
+            if entry.target.id == member.id:
+                
+                # 2. Prevent false positives: Ensure the kick happened within the last 10 seconds
+                now = datetime.now(timezone.utc)
+                time_difference = (now - entry.created_at).total_seconds()
+                
+                if time_difference <= 10:
                     embed = discord.Embed(title="Member Kicked", color=0xe67e22)
                     embed.add_field(name="User Info", value=f"{member.mention} ({member.name})\nID: {member.id}", inline=False)
                     embed.add_field(name="Responsible Moderator", value=entry.user.mention, inline=True)
                     embed.add_field(name="Reason", value=entry.reason or "No reason specified", inline=True)
                     embed.set_timestamp()
+                    
                     await log_channel.send(embed=embed)
-                    return
-        except discord.Forbidden:
-            return
+                    return  # Logged successfully, exit the function
+                    
+    except discord.Forbidden:
+        # Bot lacks 'view_audit_log' permission
+        return
 
     # --- 5. SNIPE MODULE RETENTION ---
     @commands.Cog.listener()

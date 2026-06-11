@@ -118,15 +118,33 @@ class Moderation(commands.Cog):
         if member.top_role >= ctx.author.top_role and ctx.author != ctx.guild.owner:
             return await ctx.send("You cannot kick someone with an equal or higher administrative role than yourself.")
 
+        # 1. Perform the kick
         await member.kick(reason=reason)
 
+        # 2. Build the embed (using standard utcnow)
         embed = discord.Embed(title="Member Kicked", color=Config.EMBED_COLOR)
         embed.add_field(name="User", value=f"{member.mention} ({member.id})", inline=False)
         embed.add_field(name="Moderator", value=ctx.author.mention, inline=True)
         embed.add_field(name="Reason", value=reason, inline=True)
         embed.timestamp = datetime.datetime.utcnow()
 
+        # 3. Send to the current chat where the command was run
         await ctx.send(embed=embed)
+
+        # 4. Send to the log channel if it exists in your config
+        if hasattr(Config, "LOG_CHANNEL_ID") and Config.LOG_CHANNEL_ID:
+            log_channel = ctx.guild.get_channel(Config.LOG_CHANNEL_ID)
+            
+            # If the channel isn't in the internal cache, try fetching it via API
+            if not log_channel:
+                try:
+                    log_channel = await ctx.guild.fetch_channel(Config.LOG_CHANNEL_ID)
+                except discord.HTTPException:
+                    log_channel = None
+
+            # Send the embed to the log channel if found
+            if log_channel:
+                await log_channel.send(embed=embed)
 
     # --- BAN COMMAND ---
     @commands.command(name="ban", help="Bans a member from the server.")
