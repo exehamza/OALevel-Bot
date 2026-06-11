@@ -1,4 +1,3 @@
 {
-  "test keyword": "\"yep it's working\"",
-  "hello": "hello sir"
+  "!lockin": "Use $lockin instead"
 }
