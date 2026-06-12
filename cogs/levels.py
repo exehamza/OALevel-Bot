@@ -58,7 +58,6 @@ class Leveling(commands.Cog):
             database.commit()
             
             if int(lvl) > last_lvl:
-                
                 channel = self.bot.get_channel(Config.LEVEL_CHANNEL_ID)
                 if channel is None:
                     channel = message.channel
@@ -186,13 +185,142 @@ class Leveling(commands.Cog):
                 fill=(190, 190, 190, 255)
             )
 
-        # saving image in buffer
         final_buffer = io.BytesIO()
         base_card.save(final_buffer, format="PNG")
         final_buffer.seek(0)
         
         discord_file = discord.File(fp=final_buffer, filename=f"rank_{target.id}.png")
         await ctx.send(file=discord_file)
+
+    @commands.command(name="leaderboard", aliases=["lb"], description="Display the top server members")
+    async def leaderboard(self, ctx):
+        # 1. Fetch Top 10 rows from database for the specific server guild
+        cursor.execute(
+            "SELECT user_id, level, exp FROM levels WHERE guild_id = ? ORDER BY exp DESC LIMIT 10",
+            (ctx.guild.id,)
+        )
+        top_entries = cursor.fetchall()
+
+        if not top_entries:
+            return await ctx.send("No data found for this server's leaderboard yet!")
+
+        # Layout Dimensions
+        row_w, row_h = 680, 72
+        row_gap = 6
+        
+        # Calculate height dynamically based on real items returned
+        total_height = len(top_entries) * (row_h + row_gap) - row_gap
+        leaderboard_canvas = Image.new("RGBA", (row_w, total_height), (0, 0, 0, 0))
+
+        # Core positioning markers inside the 680x72 block
+        X_RANK = 20
+        X_AVATAR = 75
+        X_NAME = 145
+        X_STATS = 480
+        CENTER_Y = row_h // 2
+
+        # Font assignments with clean system fallbacks
+        try:
+            font_rank = ImageFont.truetype("arialbd.ttf", 26)
+            font_name = ImageFont.truetype("arialbd.ttf", 22)
+            font_stats = ImageFont.truetype("arial.ttf", 18)
+        except IOError:
+            try:
+                font_rank = ImageFont.truetype("DejaVuSans-Bold.ttf", 22)
+                font_name = ImageFont.truetype("DejaVuSans-Bold.ttf", 18)
+                font_stats = ImageFont.truetype("DejaVuSans.ttf", 15)
+            except IOError:
+                font_rank = font_name = font_stats = ImageFont.load_default()
+
+        # 2. Iterate and process rows
+        async with aiohttp.ClientSession() as session:
+            for index, entry in enumerate(top_entries):
+                user_id, level, exp = entry
+                rank_num = index + 1
+
+                # Generate base strip container
+                try:
+                    row_card = Image.open("lb_card.png").convert("RGBA")
+                    if row_card.size != (row_w, row_h):
+                        row_card = row_card.resize((row_w, row_h), Image.Resampling.LANCZOS)
+                except FileNotFoundError:
+                    row_card = Image.new("RGBA", (row_w, row_h), (32, 34, 37, 255))
+
+                draw = ImageDraw.Draw(row_card)
+
+                # A. Write Rank Number
+                rank_text = f"#{rank_num}"
+                rank_colors = [(255, 215, 0, 255), (170, 180, 195, 255), (205, 127, 50, 255)]
+                rank_color = rank_colors[index] if index < 3 else (200, 200, 200, 255)
+                draw.text((X_RANK, CENTER_Y - 16), rank_text, fill=rank_color, font=font_rank)
+
+                # B. Dynamic Username Resolver
+                member = ctx.guild.get_member(user_id)
+                display_name = f"@{member.name}" if member else f"User_{str(user_id)[-4:]}"
+
+                if len(display_name) > 18:
+                    display_name = display_name[:15] + "..."
+                draw.text((X_NAME, CENTER_Y - 14), display_name, fill=(255, 255, 255, 255), font=font_name)
+
+                # C. Write Level and Experience values
+                stats_text = f"Lvl {int(level)} • {exp:,} XP"
+                draw.text((X_STATS, CENTER_Y - 11), stats_text, fill=(150, 155, 165, 255), font=font_stats)
+
+                # D. Asynchronously fetch live profile picture
+                avatar_size = (50, 50)
+                avatar_y = CENTER_Y - (avatar_size[1] // 2)
+                avatar_pasted = False
+
+                if member:
+                    try:
+                        async with session.get(member.display_avatar.url) as response:
+                            if response.status == 200:
+                                av_bytes = await response.read()
+                                avatar_img = Image.open(io.BytesIO(av_bytes)).convert("RGBA")
+                                resized_avatar = avatar_img.resize(avatar_size, Image.Resampling.LANCZOS)
+                                
+                                mask = Image.new("L", avatar_size, 0)
+                                mask_draw = ImageDraw.Draw(mask)
+                                mask_draw.ellipse((0, 0) + avatar_size, fill=255)
+                                
+                                row_card.paste(resized_avatar, (X_AVATAR, avatar_y), mask=mask)
+                                avatar_pasted = True
+                    except Exception:
+                        pass
+
+                if not avatar_pasted:
+                    draw.ellipse([X_AVATAR, avatar_y, X_AVATAR + 50, avatar_y + 50], fill=(120, 125, 135, 255))
+
+                # Assemble onto master canvas sheet
+                y_position = index * (row_h + row_gap)
+                leaderboard_canvas.paste(row_card, (0, y_position))
+
+        # 3. Buffer up the finished image sheet
+        final_buffer = io.BytesIO()
+        leaderboard_canvas.save(final_buffer, format="PNG")
+        final_buffer.seek(0)
+
+        # 4. Create the Discord File with a clean name
+        filename = "leaderboard.png"
+        discord_file = discord.File(fp=final_buffer, filename=filename)
+
+        # 5. Build the Discord Embed
+        # Sets the header text to the Server's Name
+        embed = discord.Embed(
+            title=f"🏆 {ctx.guild.name} Leaderboard",
+            description="Here are the top active members in the server!",
+            color=discord.Color.gold()
+        )
+        
+        # Optional: Add the server icon to the top right of the embed if it exists
+        if ctx.guild.icon:
+            embed.set_thumbnail(url=ctx.guild.icon.url)
+            
+        # Bind the image to the embed via the attachment protocol
+        embed.set_image(url=f"attachment://{filename}")
+
+        # Send both together!
+        await ctx.send(file=discord_file, embed=embed)
 
 async def setup(bot):
     await bot.add_cog(Leveling(bot))
