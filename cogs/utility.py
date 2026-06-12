@@ -53,6 +53,15 @@ class Utility(commands.Cog):
     @commands.has_permissions(administrator=True)
     async def steal(self, ctx, emoji: discord.PartialEmoji = None):
         
+        # --- CONFIGURATION ---
+        # Paste your exact extracted emoji strings here:
+        TICK = "<:Tick:1514986183489360087>"   
+        CROSS = "<a:Cross:1514986232294281426>" 
+
+        EMBED_COLOR_SUCCESS = discord.Color.green()
+        EMBED_COLOR_FAIL = discord.Color.red()
+        # ---------------------
+
         # STICKER STEALING
         if ctx.message.reference:
             try:
@@ -64,14 +73,19 @@ class Utility(commands.Cog):
                     
                     # Guard clause: Standard built-in Discord stickers cannot be downloaded via URL
                     if sticker.url == "":
-                        return await ctx.send("Cannot steal official/built-in Discord stickers. Try stealing a custom server sticker!")
+                        embed = discord.Embed(
+                            description=f"{CROSS} Cannot steal official/built-in Discord stickers. Try stealing a custom server sticker!",
+                            color=EMBED_COLOR_FAIL
+                        )
+                        return await ctx.send(embed=embed)
 
                     async with ctx.typing():
                         # Download sticker image bytes
                         async with aiohttp.ClientSession() as session:
                             async with session.get(sticker.url) as resp:
                                 if resp.status != 200:
-                                    return await ctx.send("Failed to download the sticker.")
+                                    embed = discord.Embed(description=f"{CROSS} Failed to download the sticker.", color=EMBED_COLOR_FAIL)
+                                    return await ctx.send(embed=embed)
                                 sticker_bytes = await resp.read()
 
                         # Determine the extension based on the sticker format type
@@ -79,7 +93,8 @@ class Utility(commands.Cog):
                         if file_format == discord.StickerFormatType.gif:
                             filename = "sticker.gif"
                         elif file_format == discord.StickerFormatType.lottie:
-                            return await ctx.send("Lottie (JSON-based animated) stickers are not supported for stealing.")
+                            embed = discord.Embed(description=f"{CROSS} Lottie (JSON-based animated) stickers are not supported for stealing.", color=EMBED_COLOR_FAIL)
+                            return await ctx.send(embed=embed)
                         else:
                             filename = "sticker.png"  # Handles PNG and APNG frames safely
 
@@ -94,43 +109,69 @@ class Utility(commands.Cog):
                             file=sticker_file
                         )
 
-                        return await ctx.send(f"Sticker added successfully")
+                        embed = discord.Embed(
+                            description=f"{TICK} Sticker **{sticker.name}** added successfully!",
+                            color=EMBED_COLOR_SUCCESS
+                        )
+                        return await ctx.send(embed=embed)
                 
             except discord.NotFound:
-                return await ctx.send("Could not find the replied message.")
+                embed = discord.Embed(description=f"{CROSS} Could not find the replied message.", color=EMBED_COLOR_FAIL)
+                return await ctx.send(embed=embed)
             except discord.Forbidden:
-                return await ctx.send("I don't have permission to manage stickers. Please check my 'Manage Expressions' permission.")
+                embed = discord.Embed(description=f"{CROSS} I don't have permission to manage stickers. Please check my **Manage Expressions** permission.", color=EMBED_COLOR_FAIL)
+                return await ctx.send(embed=embed)
             except discord.HTTPException as e:
                 print(e)  # Log error to console for debug
-                return await ctx.send("Failed to add sticker. Server slots might be full, or file requirements weren't met.")
+                embed = discord.Embed(description=f"{CROSS} Failed to add sticker. Server slots might be full, or file requirements weren't met.", color=EMBED_COLOR_FAIL)
+                return await ctx.send(embed=embed)
 
         # EMOJI STEALING
         if not emoji:
-            return await ctx.send(f"Usage:\n• Reply to a sticker with `{ctx.prefix}steal` to steal a sticker.\n• Type `{ctx.prefix}steal <custom_emoji>` to steal an emoji.")
+            embed = discord.Embed(
+                title="Command Usage",
+                description=f"• Reply to a sticker with `{ctx.prefix}steal` to steal a sticker.\n• Type `{ctx.prefix}steal <custom_emoji>` to steal an emoji.",
+                color=discord.Color.blue()
+            )
+            return await ctx.send(embed=embed)
 
         if not emoji.id:
-            return await ctx.send("Please provide a valid custom emoji. Standard emojis won't work.")
+            embed = discord.Embed(description=f"{CROSS} Please provide a valid custom emoji. Standard emojis won't work.", color=EMBED_COLOR_FAIL)
+            return await ctx.send(embed=embed)
 
         async with ctx.typing():
             try:
                 async with aiohttp.ClientSession() as session:
                     async with session.get(emoji.url) as resp:
                         if resp.status != 200:
-                            return await ctx.send("Failed to download the emoji.")
+                            embed = discord.Embed(description=f"{CROSS} Failed to download the emoji.", color=EMBED_COLOR_FAIL)
+                            return await ctx.send(embed=embed)
                         emoji_bytes = await resp.read()
 
                 new_emoji = await ctx.guild.create_custom_emoji(name=emoji.name, image=emoji_bytes)
-                await ctx.send(f"Successfully added the emoji: {new_emoji} as `:{emoji.name}:`")
+                
+                embed = discord.Embed(
+                    description=f"{TICK} Successfully added the emoji {new_emoji} as `:{emoji.name}:`",
+                    color=EMBED_COLOR_SUCCESS
+                )
+                await ctx.send(embed=embed)
 
             except discord.Forbidden:
-                await ctx.send("I don't have permission to manage emojis.")
+                embed = discord.Embed(description=f"{CROSS} I don't have permission to manage emojis.", color=EMBED_COLOR_FAIL)
+                await ctx.send(embed=embed)
             except discord.HTTPException:
-                await ctx.send("Failed to add emoji. Check server slots or file constraints.")
+                embed = discord.Embed(description=f"{CROSS} Failed to add emoji. Check server slots or file constraints.", color=EMBED_COLOR_FAIL)
+                await ctx.send(embed=embed)
 
     @steal.error
     async def steal_error(self, ctx, error):
         if isinstance(error, commands.MissingPermissions):
-            await ctx.send("You need to be an Administrator to use this command.")
+            embed = discord.Embed(
+                # Use the CROSS variable here so it renders correctly
+                description=f"<:Cross:987654321098765432> You need to be an **Administrator** to use this command.",
+                color=discord.Color.red()
+            )
+            await ctx.send(embed=embed)
 
 async def setup(bot):
     await bot.add_cog(Utility(bot))
