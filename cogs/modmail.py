@@ -41,7 +41,7 @@ class Modmail(commands.Cog):
             # If no active thread exists, create a brand new one
             if not active_thread:
                 init_embed = discord.Embed(
-                    title="🆕 New Modmail Ticket Created",
+                    title="New Modmail Ticket Created",
                     description=f"User: {message.author.mention} ({message.author.name})\nID: `{message.author.id}`",
                     color=discord.Color.blue()
                 )
@@ -52,7 +52,11 @@ class Modmail(commands.Cog):
                     auto_archive_duration=1440  # 24 hours
                 )
                 
-                await message.author.send("✅ Your modmail ticket has been opened! Staff have been notified.")
+                embed = discord.Embed(
+                description="<:Tick:1514986183489360087> **Your modmail ticket has been opened!** Staff have been notified.",
+                color=discord.Color.green()
+                )
+                await message.author.send(embed=embed)
 
             # Forward user's content
             user_embed = discord.Embed(
@@ -81,7 +85,11 @@ class Modmail(commands.Cog):
                     try:
                         target_user = await self.bot.fetch_user(user_id)
                     except discord.NotFound:
-                        return await message.channel.send("❌ Could not find that user. They may have left the server.")
+                        embed = discord.Embed(
+                        description="<a:Cross:1514986232294281426> **Could not find that user.** They may have left the server.",
+                        color=discord.Color.red()
+                        )
+                        return await message.channel.send(embed=embed)
 
                     reply_embed = discord.Embed(
                         title="💬 Staff Reply",
@@ -98,7 +106,11 @@ class Modmail(commands.Cog):
                         await target_user.send(embed=reply_embed, files=files)
                         await message.add_reaction("✅")
                     except discord.Forbidden:
-                        await message.channel.send("❌ Unable to DM user. They likely closed their direct messages.")
+                        embed = discord.Embed(
+                        description="<:Tick:1514986183489360087> **Your modmail ticket has been opened!** Staff have been notified",
+                        color=discord.Color.green()
+                        )
+                        await message.author.send(embed=embed)
 
     # 5. UTILITY COMMAND TO CLOSE TICKETS
     @commands.command(name="close")
