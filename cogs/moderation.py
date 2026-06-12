@@ -4,15 +4,6 @@ import discord
 from discord.ext import commands
 from config import Config
 
-# PURGE
-# KICK
-# BAN
-# UNBAN
-# MUTE
-# UNMUTE
-# SAY
-# REPLY
-
 class Moderation(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -61,10 +52,7 @@ class Moderation(commands.Cog):
         try:
             await log_channel.send(embed=embed)
         except discord.Forbidden:
-            print(
-                f"Moderation log failed: I cannot send messages/embeds in "
-                f"#{getattr(log_channel, 'name', Config.LOG_CHANNEL_ID)}."
-            )
+            print(f"Moderation log failed: I cannot send messages/embeds in #{getattr(log_channel, 'name', Config.LOG_CHANNEL_ID)}.")
         except discord.HTTPException as error:
             print(f"Moderation log failed: Discord rejected the log message. Error: {error}")
 
@@ -74,7 +62,7 @@ class Moderation(commands.Cog):
 
     # --- PURGE COMMAND ---
     @commands.command(name="purge", help="Purges a set number of messages from the channel.")
-    @commands.guild_only()  # Prevents users from breaking the bot by trying this in DMs
+    @commands.guild_only()
     @commands.has_permissions(manage_messages=True)
     @commands.bot_has_permissions(manage_messages=True, read_message_history=True)
     async def purge(self, ctx, amount: int):
@@ -85,16 +73,13 @@ class Moderation(commands.Cog):
             return await ctx.send("Please purge 100 messages or fewer at a time.", delete_after=5)
 
         try:
-            # We add 1 to amount to delete the user's initial "!purge" invocation message too
             deleted = await ctx.channel.purge(limit=amount + 1)
         except discord.Forbidden:
             return await ctx.send("I need Manage Messages and Read Message History permissions in this channel.", delete_after=7)
         except discord.HTTPException:
             return await ctx.send("Discord refused the purge. This can happen with very old messages or too many messages.", delete_after=7)
 
-        # Fallback to blue if Config.EMBED_COLOR isn't set up globally
         embed_color = getattr(Config, "EMBED_COLOR", discord.Color.blue())
-
         embed = discord.Embed(
             description=f"Successfully deleted **{len(deleted) - 1}** messages.",
             color=embed_color
@@ -114,44 +99,64 @@ class Moderation(commands.Cog):
     # --- KICK COMMAND ---
     @commands.command(name="kick", help="Kicks a member from the server.")
     @commands.has_permissions(kick_members=True)
+    @commands.bot_has_permissions(kick_members=True)
     async def kick(self, ctx, member: discord.Member, *, reason: str = "No reason provided"):
         if member.top_role >= ctx.author.top_role and ctx.author != ctx.guild.owner:
             return await ctx.send("You cannot kick someone with an equal or higher administrative role than yourself.")
 
-        # 1. Perform the kick
+        # NEW: DM the user FIRST before kicking
+        dm_embed = discord.Embed(
+            title=f"👟 You have been kicked from {ctx.guild.name}",
+            color=0xe67e22,
+            timestamp=datetime.datetime.utcnow()
+        )
+        dm_embed.add_field(name="Reason", value=reason, inline=False)
+        try:
+            await member.send(embed=dm_embed)
+        except discord.Forbidden:
+            pass  # User has DMs disabled or blocked the bot
+
+        # Perform the kick action
         await member.kick(reason=reason)
 
-        # 2. Build the embed (using standard utcnow)
         embed = discord.Embed(title="Member Kicked", color=Config.EMBED_COLOR)
         embed.add_field(name="User", value=f"{member.mention} ({member.id})", inline=False)
         embed.add_field(name="Moderator", value=ctx.author.mention, inline=True)
         embed.add_field(name="Reason", value=reason, inline=True)
         embed.timestamp = datetime.datetime.utcnow()
 
-        # 3. Send to the current chat where the command was run
         await ctx.send(embed=embed)
 
-        # 4. Send to the log channel if it exists in your config
         if hasattr(Config, "LOG_CHANNEL_ID") and Config.LOG_CHANNEL_ID:
             log_channel = ctx.guild.get_channel(Config.LOG_CHANNEL_ID)
-            
-            # If the channel isn't in the internal cache, try fetching it via API
             if not log_channel:
                 try:
                     log_channel = await ctx.guild.fetch_channel(Config.LOG_CHANNEL_ID)
                 except discord.HTTPException:
                     log_channel = None
 
-            # Send the embed to the log channel if found
             if log_channel:
                 await log_channel.send(embed=embed)
 
     # --- BAN COMMAND ---
     @commands.command(name="ban", help="Bans a member from the server.")
     @commands.has_permissions(ban_members=True)
+    @commands.bot_has_permissions(ban_members=True)
     async def ban(self, ctx, member: discord.Member, *, reason: str = "No reason provided"):
         if member.top_role >= ctx.author.top_role and ctx.author != ctx.guild.owner:
             return await ctx.send("You cannot ban someone with an equal or higher administrative role than yourself.")
+
+        # NEW: DM the user FIRST before banning
+        dm_embed = discord.Embed(
+            title=f"🔨 You have been permanently banned from {ctx.guild.name}",
+            color=0xe74c3c,
+            timestamp=datetime.datetime.utcnow()
+        )
+        dm_embed.add_field(name="Reason", value=reason, inline=False)
+        try:
+            await member.send(embed=dm_embed)
+        except discord.Forbidden:
+            pass
 
         await member.ban(reason=reason)
 
@@ -176,12 +181,11 @@ class Moderation(commands.Cog):
     # --- UNBAN COMMAND ---
     @commands.command(name="unban", help="Unbans a user using their username#discriminator or ID.")
     @commands.has_permissions(ban_members=True)
+    @commands.bot_has_permissions(ban_members=True)
     async def unban(self, ctx, *, user_spec: str):
-        # Scan through the server's ban log entries
         async for ban_entry in ctx.guild.bans(limit=1000):
             user = ban_entry.user
 
-            # Check if input matches either the raw string representation or the exact ID
             if user_spec == str(user) or user_spec == str(user.id):
                 await ctx.guild.unban(user)
 
@@ -208,6 +212,7 @@ class Moderation(commands.Cog):
     # --- MUTE / TIMEOUT COMMAND ---
     @commands.command(name="mute", aliases=["timeout"], help="Mutes a member using Discord's native timeout.")
     @commands.has_permissions(moderate_members=True)
+    @commands.bot_has_permissions(moderate_members=True)
     async def mute(self, ctx, member: discord.Member, duration: str, *, reason: str = "No reason provided"):
         minutes = self.parse_duration(duration)
         if minutes is None:
@@ -219,12 +224,24 @@ class Moderation(commands.Cog):
         if member.top_role >= ctx.author.top_role and ctx.author != ctx.guild.owner:
             return await ctx.send("You cannot mute someone with an equal or higher administrative role than yourself.")
 
-        # Cap timeout at 28 days (Discord's maximum allowed limit)
         if minutes > 40320:
             return await ctx.send("You cannot mute someone for more than 28 days (40,320 minutes).")
 
-        duration = datetime.timedelta(minutes=minutes)
-        await member.timeout(duration, reason=reason)
+        # NEW: DM the user before applying the timeout
+        dm_embed = discord.Embed(
+            title=f"🔇 You have been muted in {ctx.guild.name}",
+            color=0xf39c12,
+            timestamp=datetime.datetime.utcnow()
+        )
+        dm_embed.add_field(name="Duration", value=f"{duration} ({minutes} minutes)", inline=True)
+        dm_embed.add_field(name="Reason", value=reason, inline=True)
+        try:
+            await member.send(embed=dm_embed)
+        except discord.Forbidden:
+            pass
+
+        duration_delta = datetime.timedelta(minutes=minutes)
+        await member.timeout(duration_delta, reason=reason)
 
         embed = discord.Embed(title="Member Muted", color=Config.EMBED_COLOR)
         embed.add_field(name="User", value=f"{member.mention} ({member.id})", inline=False)
@@ -249,6 +266,7 @@ class Moderation(commands.Cog):
     # --- UNMUTE / REMOVE TIMEOUT COMMAND ---
     @commands.command(name="unmute", aliases=["untimeout"], help="Unmutes a member by removing their timeout.")
     @commands.has_permissions(moderate_members=True)
+    @commands.bot_has_permissions(moderate_members=True)
     async def unmute(self, ctx, member: discord.Member, *, reason: str = "No reason provided"):
         if not member.is_timed_out():
             return await ctx.send(f"{member.mention} is not currently muted.")
@@ -256,7 +274,18 @@ class Moderation(commands.Cog):
         if member.top_role >= ctx.author.top_role and ctx.author != ctx.guild.owner:
             return await ctx.send("You cannot unmute someone with an equal or higher administrative role than yourself.")
 
-        # Passing None to timeout instantly clears any active timeout duration
+        # NEW: DM the user that they have been unmuted
+        dm_embed = discord.Embed(
+            title=f"🔊 Your mute has been removed in {ctx.guild.name}",
+            color=0x2ecc71,
+            timestamp=datetime.datetime.utcnow()
+        )
+        dm_embed.add_field(name="Reason", value=reason, inline=False)
+        try:
+            await member.send(embed=dm_embed)
+        except discord.Forbidden:
+            pass
+
         await member.timeout(None, reason=reason)
 
         embed = discord.Embed(title="Member Unmuted", color=Config.EMBED_COLOR)
@@ -281,28 +310,23 @@ class Moderation(commands.Cog):
     @commands.command(name="say", help="Makes the bot say a message. Staff only.")
     @commands.has_permissions(administrator=True)
     async def say(self, ctx, *, message: str):
-        # Delete the command invoker's original message to keep chat clean
         try:
             await ctx.message.delete()
         except (discord.Forbidden, discord.NotFound):
             pass
-
         await ctx.send(message)
 
     # --- REPLY TO MESSAGE ID COMMAND ---
     @commands.command(name="reply", help="Makes the bot reply to a specific message ID. Staff only.")
     @commands.has_permissions(administrator=True)
     async def reply(self, ctx, message_id: int, *, message: str):
-        # Delete the invoker's command message
         try:
             await ctx.message.delete()
         except (discord.Forbidden, discord.NotFound):
             pass
 
         try:
-            # Fetch the target message from the current channel
             target_message = await ctx.channel.fetch_message(message_id)
-            # Use the target message's reply method to thread it properly
             await target_message.reply(message)
         except discord.NotFound:
             await ctx.send("Error: Could not find a message with that ID in this channel.", delete_after=5)
@@ -322,7 +346,7 @@ class Moderation(commands.Cog):
         if isinstance(error, commands.MissingPermissions):
             await ctx.send("You do not have the required staff permissions to execute this command.")
         elif isinstance(error, commands.BotMissingPermissions):
-            await ctx.send("I need Manage Messages and Read Message History permissions to run that command.")
+            await ctx.send("I need the correct administrative permissions (Kick, Ban, Manage Messages, Moderate Members) to execute this command.")
         elif isinstance(error, commands.NoPrivateMessage):
             await ctx.send("This command can only be used inside a server channel.")
         elif isinstance(error, commands.MissingRequiredArgument):
@@ -334,7 +358,6 @@ class Moderation(commands.Cog):
                 await ctx.send("Invalid argument provided. Ensure you are targeting a valid user ID or mention.")
         else:
             raise error
-
 
 async def setup(bot):
     await bot.add_cog(Moderation(bot))

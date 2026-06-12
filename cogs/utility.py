@@ -2,12 +2,52 @@ import discord
 from discord.ext import commands
 import aiohttp
 import io
+import asyncio
+import platform
+import subprocess
 
 # STEAL
 
 class Utility(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+
+    @commands.command(name="ping", help="Pings Discord's gateway or an external host like google.com.")
+    async def ping(self, ctx, host: str = None):
+        # Case 1: Standard $ping without arguments (Checks Discord Latency)
+        if not host:
+            discord_ping = round(self.bot.latency * 1000)
+            return await ctx.send(f"🏓 Pong! Discord API latency is `{discord_ping}ms`.")
+
+        # Case 2: $ping google.com (Checks external website latency)
+        # Clean up the input to prevent malicious command injections
+        host = host.replace("http://", "").replace("https://", "").split("/")[0].strip()
+
+        await ctx.send(f"Sending packets to `{host}`... please wait.")
+
+        # Determine command flags based on host operating system (Windows uses -n, Linux uses -c)
+        param = "-n" if platform.system().lower() == "windows" else "-c"
+        command = ["ping", param, "3", host]
+
+        try:
+            # Run the system terminal ping asynchronously so it doesn't block the bot
+            loop = asyncio.get_event_loop()
+            process = await loop.run_in_executor(
+                None, 
+                lambda: subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5)
+            )
+
+            if process.returncode == 0:
+                # Successfully got a response from the host
+                await ctx.send(f"Successfully reached `{host}`!\n```text\n{process.stdout}\n```")
+            else:
+                # Request timed out or host didn't respond
+                await ctx.send(f"Failed to ping `{host}`. The host might be down, or blocking ICMP packets.")
+                
+        except asyncio.TimeoutError:
+            await ctx.send(f"⏱️ Connection to `{host}` timed out after 5 seconds.")
+        except Exception as e:
+            await ctx.send(f"⚠️ An internal system error occurred: `{str(e)}`")
 
     @commands.command(name="steal", help="Steals an emoji or a replied sticker and adds it to this server.")
     @commands.has_permissions(administrator=True)
