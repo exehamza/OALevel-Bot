@@ -67,17 +67,33 @@ class Moderation(commands.Cog):
     @commands.bot_has_permissions(manage_messages=True, read_message_history=True)
     async def purge(self, ctx, amount: int):
         if amount < 1:
-            return await ctx.send("Please provide a number greater than 0.", delete_after=5)
+            embed = discord.Embed(
+                description="<a:Cross:1514986232294281426> **Please provide a number greater than 0.**",
+                color=discord.Color.red()
+            )
+            return await ctx.send(embed=embed, delete_after=5)
 
         if amount > 100:
-            return await ctx.send("Please purge 100 messages or fewer at a time.", delete_after=5)
+            embed = discord.Embed(
+                description="<a:Cross:1514986232294281426> **Please purge 100 messages or fewer at a time.**",
+                color=discord.Color.red()
+            )
+            return await ctx.send(embed=embed, delete_after=5)
 
         try:
             deleted = await ctx.channel.purge(limit=amount + 1)
         except discord.Forbidden:
-            return await ctx.send("I need Manage Messages and Read Message History permissions in this channel.", delete_after=7)
+            embed = discord.Embed(
+                description="<a:Cross:1514986232294281426> **I need Manage Messages and Read Message History permissions in this channel.**",
+                color=discord.Color.red()
+            )
+            return await ctx.send(embed=embed, delete_after=7)
         except discord.HTTPException:
-            return await ctx.send("Discord refused the purge. This can happen with very old messages or too many messages.", delete_after=7)
+            embed = discord.Embed(
+                description="<a:Cross:1514986232294281426> **Discord refused the purge.** This can happen with very old messages or too many messages.",
+                color=discord.Color.red()
+            )
+            return await ctx.send(embed=embed, delete_after=7)
 
         embed_color = getattr(Config, "EMBED_COLOR", discord.Color.blue())
         embed = discord.Embed(
@@ -102,9 +118,13 @@ class Moderation(commands.Cog):
     @commands.bot_has_permissions(kick_members=True)
     async def kick(self, ctx, member: discord.Member, *, reason: str = "No reason provided"):
         if member.top_role >= ctx.author.top_role and ctx.author != ctx.guild.owner:
-            return await ctx.send("You cannot kick someone with an equal or higher administrative role than yourself.")
+            embed = discord.Embed(
+                description="<a:Cross:1514986232294281426> **You cannot kick someone with an equal or higher administrative role than yourself.**",
+                color=discord.Color.red()
+            )
+            return await ctx.send(embed=embed)
 
-        # NEW: DM the user FIRST before kicking
+        # DM the user FIRST before kicking
         dm_embed = discord.Embed(
             title=f"👟 You have been kicked from {ctx.guild.name}",
             color=0xe67e22,
@@ -144,9 +164,13 @@ class Moderation(commands.Cog):
     @commands.bot_has_permissions(ban_members=True)
     async def ban(self, ctx, member: discord.Member, *, reason: str = "No reason provided"):
         if member.top_role >= ctx.author.top_role and ctx.author != ctx.guild.owner:
-            return await ctx.send("You cannot ban someone with an equal or higher administrative role than yourself.")
+            embed = discord.Embed(
+                description="<a:Cross:1514986232294281426> **You cannot ban someone with an equal or higher administrative role than yourself.**",
+                color=discord.Color.red()
+            )
+            return await ctx.send(embed=embed)
 
-        # NEW: DM the user FIRST before banning
+        # DM the user FIRST before banning
         dm_embed = discord.Embed(
             title=f"🔨 You have been permanently banned from {ctx.guild.name}",
             color=0xe74c3c,
@@ -207,7 +231,11 @@ class Moderation(commands.Cog):
                 )
                 return
 
-        await ctx.send(f"Could not find a banned user matching `{user_spec}`.")
+        embed = discord.Embed(
+            description=f"<a:Cross:1514986232294281426> **Could not find a banned user matching** `{user_spec}`.",
+            color=discord.Color.red()
+        )
+        await ctx.send(embed=embed)
 
     # --- MUTE / TIMEOUT COMMAND ---
     @commands.command(name="mute", aliases=["timeout"], help="Mutes a member using Discord's native timeout.")
@@ -216,18 +244,34 @@ class Moderation(commands.Cog):
     async def mute(self, ctx, member: discord.Member, duration: str, *, reason: str = "No reason provided"):
         minutes = self.parse_duration(duration)
         if minutes is None:
-            return await ctx.send("Invalid duration. Use minutes like `10`, `10m`, `2h`, or `1d`.")
+            embed = discord.Embed(
+                description="<a:Cross:1514986232294281426> **Invalid duration.** Use formats like `10`, `10m`, `2h`, or `1d`.",
+                color=discord.Color.red()
+            )
+            return await ctx.send(embed=embed)
 
         if minutes < 1:
-            return await ctx.send("Please provide a mute duration greater than 0 minutes.")
+            embed = discord.Embed(
+                description="<a:Cross:1514986232294281426> **Please provide a mute duration greater than 0 minutes.**",
+                color=discord.Color.red()
+            )
+            return await ctx.send(embed=embed)
 
         if member.top_role >= ctx.author.top_role and ctx.author != ctx.guild.owner:
-            return await ctx.send("You cannot mute someone with an equal or higher administrative role than yourself.")
+            embed = discord.Embed(
+                description="<a:Cross:1514986232294281426> **You cannot mute someone with an equal or higher administrative role than yourself.**",
+                color=discord.Color.red()
+            )
+            return await ctx.send(embed=embed)
 
         if minutes > 40320:
-            return await ctx.send("You cannot mute someone for more than 28 days (40,320 minutes).")
+            embed = discord.Embed(
+                description="<a:Cross:1514986232294281426> **You cannot mute someone for more than 28 days (40,320 minutes).**",
+                color=discord.Color.red()
+            )
+            return await ctx.send(embed=embed)
 
-        # NEW: DM the user before applying the timeout
+        # DM the user before applying the timeout
         dm_embed = discord.Embed(
             title=f"🔇 You have been muted in {ctx.guild.name}",
             color=0xf39c12,
@@ -269,12 +313,20 @@ class Moderation(commands.Cog):
     @commands.bot_has_permissions(moderate_members=True)
     async def unmute(self, ctx, member: discord.Member, *, reason: str = "No reason provided"):
         if not member.is_timed_out():
-            return await ctx.send(f"{member.mention} is not currently muted.")
+            embed = discord.Embed(
+                description=f"<a:Cross:1514986232294281426> {member.mention} **is not currently muted.**",
+                color=discord.Color.red()
+            )
+            return await ctx.send(embed=embed)
 
         if member.top_role >= ctx.author.top_role and ctx.author != ctx.guild.owner:
-            return await ctx.send("You cannot unmute someone with an equal or higher administrative role than yourself.")
+            embed = discord.Embed(
+                description="<a:Cross:1514986232294281426> **You cannot unmute someone with an equal or higher administrative role than yourself.**",
+                color=discord.Color.red()
+            )
+            return await ctx.send(embed=embed)
 
-        # NEW: DM the user that they have been unmuted
+        # DM the user that they have been unmuted
         dm_embed = discord.Embed(
             title=f"🔊 Your mute has been removed in {ctx.guild.name}",
             color=0x2ecc71,
@@ -329,9 +381,17 @@ class Moderation(commands.Cog):
             target_message = await ctx.channel.fetch_message(message_id)
             await target_message.reply(message)
         except discord.NotFound:
-            await ctx.send("Error: Could not find a message with that ID in this channel.", delete_after=5)
+            embed = discord.Embed(
+                description="<a:Cross:1514986232294281426> **Error: Could not find a message with that ID in this channel.**",
+                color=discord.Color.red()
+            )
+            await ctx.send(embed=embed, delete_after=5)
         except discord.HTTPException:
-            await ctx.send("Failed to send reply due to a Discord API error.", delete_after=5)
+            embed = discord.Embed(
+                description="<a:Cross:1514986232294281426> **Failed to send reply due to a Discord API error.**",
+                color=discord.Color.red()
+            )
+            await ctx.send(embed=embed, delete_after=5)
 
     # --- ERROR HANDLING ---
     @purge.error
@@ -344,18 +404,42 @@ class Moderation(commands.Cog):
     @reply.error
     async def mod_errors(self, ctx, error):
         if isinstance(error, commands.MissingPermissions):
-            await ctx.send("You do not have the required staff permissions to execute this command.")
+            embed = discord.Embed(
+                description="<a:Cross:1514986232294281426> **You do not have the required staff permissions to execute this command.**",
+                color=discord.Color.red()
+            )
+            await ctx.send(embed=embed)
         elif isinstance(error, commands.BotMissingPermissions):
-            await ctx.send("I need the correct administrative permissions (Kick, Ban, Manage Messages, Moderate Members) to execute this command.")
+            embed = discord.Embed(
+                description="<a:Cross:1514986232294281426> **I need the correct administrative permissions (Kick, Ban, Manage Messages, Moderate Members) to execute this command.**",
+                color=discord.Color.red()
+            )
+            await ctx.send(embed=embed)
         elif isinstance(error, commands.NoPrivateMessage):
-            await ctx.send("This command can only be used inside a server channel.")
+            embed = discord.Embed(
+                description="<a:Cross:1514986232294281426> **This command can only be used inside a server channel.**",
+                color=discord.Color.red()
+            )
+            await ctx.send(embed=embed)
         elif isinstance(error, commands.MissingRequiredArgument):
-            await ctx.send(f"Missing parameters! Target a user or specify a value. Use `{Config.PREFIX}help {ctx.command.name}` for syntax guidelines.")
+            embed = discord.Embed(
+                description=f"<a:Cross:1514986232294281426> **Missing parameters!** Target a user or specify a value. Use `{Config.PREFIX}help {ctx.command.name}` for syntax guidelines.",
+                color=discord.Color.red()
+            )
+            await ctx.send(embed=embed)
         elif isinstance(error, commands.BadArgument):
             if ctx.command and ctx.command.name in ("mute", "timeout"):
-                await ctx.send("Invalid mute command. Use a valid member and duration, like `!mute @user 10m reason`.")
+                embed = discord.Embed(
+                    description=f"<a:Cross:1514986232294281426> **Invalid mute command syntax.** Use a valid member and duration, like `{Config.PREFIX}mute @user 10m reason`.",
+                    color=discord.Color.red()
+                )
+                await ctx.send(embed=embed)
             else:
-                await ctx.send("Invalid argument provided. Ensure you are targeting a valid user ID or mention.")
+                embed = discord.Embed(
+                    description="<a:Cross:1514986232294281426> **Invalid argument provided.** Ensure you are targeting a valid user ID or mention.",
+                    color=discord.Color.red()
+                )
+                await ctx.send(embed=embed)
         else:
             raise error
 
