@@ -33,24 +33,45 @@ class LockIn(commands.Cog):
         seconds = self.parse_time(time_input)
         
         if seconds is None:
-            return await ctx.send("❌ Invalid format! Please use formats like `10m` (minutes) or `2h` (hours).")
+            embed = discord.Embed(
+                description="<a:Cross:1514986232294281426> **Invalid format!** Please use formats like `10m` (minutes) or `2h` (hours).",
+                color=discord.Color.red()
+            )
+            return await ctx.send(embed=embed)
 
         # 2. Enforce limits (10 minutes minimum, 24 hours maximum)
         MIN_SECONDS = 10 * 60       # 600 seconds
         MAX_SECONDS = 24 * 3600     # 86,400 seconds
 
         if seconds < MIN_SECONDS:
-            return await ctx.send("❌ Minimum lock-in time is `10m` (10 minutes).")
+            embed = discord.Embed(
+                description="<a:Cross:1514986232294281426> **Minimum lock-in time is `10m` (10 minutes).**",
+                color=discord.Color.red()
+            )
+            return await ctx.send(embed=embed)
+            
         if seconds > MAX_SECONDS:
-            return await ctx.send("❌ Maximum lock-in time is `24h` (24 hours).")
+            embed = discord.Embed(
+                description="<a:Cross:1514986232294281426> **Maximum lock-in time is `24h` (24 hours).**",
+                color=discord.Color.red()
+            )
+            return await ctx.send(embed=embed)
 
         # 3. Check if the bot has permission to moderate members
         if not ctx.guild.me.guild_permissions.moderate_members:
-            return await ctx.send("❌ I don't have the **Moderate Members** (Timeout) permission to lock you in!")
+            embed = discord.Embed(
+                description="<a:Cross:1514986232294281426> **I don't have the Moderate Members (Timeout) permission to lock you in!**",
+                color=discord.Color.red()
+            )
+            return await ctx.send(embed=embed)
 
         # 4. Check if the user can actually be timed out (e.g., bot can't timeout Server Owners or higher roles)
         if ctx.author.top_role >= ctx.guild.me.top_role or ctx.author == ctx.guild.owner:
-            return await ctx.send("❌ Your power level is too high! I cannot timeout server owners or administrators above me.")
+            embed = discord.Embed(
+                description="<a:Cross:1514986232294281426> **Your power level is too high!** I cannot timeout server owners or administrators above me.",
+                color=discord.Color.red()
+            )
+            return await ctx.send(embed=embed)
 
         # 5. Apply the timeout
         # discord.py uses a timedelta added to the current UTC time for timeouts
@@ -69,9 +90,17 @@ class LockIn(commands.Cog):
             await ctx.send(embed=embed)
             
         except discord.Forbidden:
-            await ctx.send("❌ I encountered a permission error trying to mute you.")
+            embed = discord.Embed(
+                description="<a:Cross:1514986232294281426> **I encountered a permission error trying to mute you.**",
+                color=discord.Color.red()
+            )
+            await ctx.send(embed=embed)
         except Exception as e:
-            await ctx.send(f"❌ An error occurred: {e}")
+            embed = discord.Embed(
+                description=f"<a:Cross:1514986232294281426> **An error occurred:** {e}",
+                color=discord.Color.red()
+            )
+            await ctx.send(embed=embed)
 
 async def setup(bot):
     await bot.add_cog(LockIn(bot))
