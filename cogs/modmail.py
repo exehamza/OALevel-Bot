@@ -53,8 +53,8 @@ class Modmail(commands.Cog):
                 )
                 
                 embed = discord.Embed(
-                description="<:Tick:1514986183489360087> **Your modmail ticket has been opened!** Staff have been notified.",
-                color=discord.Color.green()
+                    description="<:Tick:1514986183489360087> **Your modmail ticket has been opened!** Staff have been notified.",
+                    color=discord.Color.green()
                 )
                 await message.author.send(embed=embed)
 
@@ -86,8 +86,8 @@ class Modmail(commands.Cog):
                         target_user = await self.bot.fetch_user(user_id)
                     except discord.NotFound:
                         embed = discord.Embed(
-                        description="<a:Cross:1514986232294281426> **Could not find that user.** They may have left the server.",
-                        color=discord.Color.red()
+                            description="<a:Cross:1514986232294281426> **Could not find that user.** They may have left the server.",
+                            color=discord.Color.red()
                         )
                         return await message.channel.send(embed=embed)
 
@@ -107,11 +107,12 @@ class Modmail(commands.Cog):
                         await message.add_reaction("✅")
                     except discord.Forbidden:
                         embed = discord.Embed(
-                        description="<:Tick:1514986183489360087> **Your modmail ticket has been opened!** Staff have been notified",
-                        color=discord.Color.green()
+                            description="<a:Cross:1514986232294281426> **Could not send message.** The user has direct messages (DMs) closed.",
+                            color=discord.Color.red()
                         )
-                        await message.author.send(embed=embed)
+                        await message.channel.send(embed=embed)
 
+    # 5. UTILITY COMMAND TO CLOSE TICKETS
     # 5. UTILITY COMMAND TO CLOSE TICKETS
     @commands.command(name="close")
     @commands.guild_only()
@@ -119,7 +120,11 @@ class Modmail(commands.Cog):
     async def close_ticket(self, ctx):
         """Closes and archives a modmail thread."""
         if not isinstance(ctx.channel, discord.Thread) or ctx.channel.parent_id != Config.MODMAIL_CHANNEL_ID:
-            return await ctx.send("❌ This command can only be used inside active modmail threads.")
+            embed = discord.Embed(
+                description="<a:Cross:1514986232294281426> **This command can only be used inside active modmail threads.**",
+                color=discord.Color.red()
+            )
+            return await ctx.send(embed=embed)
 
         if not ctx.channel.name.startswith("Ticket-"):
             return
@@ -128,11 +133,19 @@ class Modmail(commands.Cog):
         
         try:
             target_user = await self.bot.fetch_user(user_id)
-            await target_user.send("🔒 Your modmail ticket has been closed by staff. If you need anything else, simply message me again!")
+            user_embed = discord.Embed(
+                description="🔒 **Your modmail ticket has been closed by staff.** If you need anything else, simply message me again!",
+                color=discord.Color.red()
+            )
+            await target_user.send(embed=user_embed)
         except discord.Forbidden:
             pass # User closed DMs or left
 
-        await ctx.send("🔒 Ticket closed. Archiving thread...")
+        staff_embed = discord.Embed(
+            description="🔒 **Ticket closed.** Archiving thread...",
+            color=discord.Color.red()
+        )
+        await ctx.send(embed=staff_embed)
         await ctx.channel.edit(archived=True, locked=True)
 
 async def setup(bot):
