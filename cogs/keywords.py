@@ -8,6 +8,10 @@ from config import Config
 # Path to save your auto-responder keywords
 KEYWORDS_FILE = "./data/keywords.json"
 
+# Custom Emojis
+TICK = "<:Tick:1514986183489360087>"
+CROSS = "<a:Cross:1514986232294281426>"
+
 class Keywords(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -78,11 +82,16 @@ class Keywords(commands.Cog):
     async def add_keyword(self, ctx, *, raw_input: str):
         """Adds or updates a keyword trigger response using the | separator."""
         if "|" not in raw_input:
-            return await ctx.send(
-                f"❌ **Invalid Syntax!** You must separate the trigger and response with a `|` symbol.\n"
-                f"👉 Syntax: `{Config.PREFIX}keyword add [trigger] | [response]`\n"
-                f"👉 Example: `{Config.PREFIX}keyword add good morning | Hello! Hope you have a great day!`"
+            embed = discord.Embed(
+                title=f"{CROSS} Invalid Syntax!",
+                description=(
+                    f"You must separate the trigger and response with a `|` symbol.\n\n"
+                    f"👉 **Syntax:** `{Config.PREFIX}keyword add [trigger] | [response]`\n"
+                    f"👉 **Example:** `{Config.PREFIX}keyword add good morning | Hello! Hope you have a great day!`"
+                ),
+                color=discord.Color.red()
             )
+            return await ctx.send(embed=embed)
 
         # Split the input into exactly two parts based on the first pipe symbol found
         parts = raw_input.split("|", 1)
@@ -90,17 +99,23 @@ class Keywords(commands.Cog):
         response = parts[1].strip()
 
         if not trigger or not response:
-            return await ctx.send("❌ Both the trigger text (before the `|`) and the response text (after the `|`) are required.")
+            embed = discord.Embed(
+                description=f"{CROSS} Both the trigger text (before the `|`) and the response text (after the `|`) are required.",
+                color=discord.Color.red()
+            )
+            return await ctx.send(embed=embed)
 
         # Saves or updates the trigger mapping
         self.keywords[trigger] = response
         self.save_keywords()
         
-        await ctx.send(
-            f"✅ **Auto-responder updated!**\n"
-            f"• **When someone says:** `{trigger}`\n"
-            f"• **I will reply with:** {response}"
+        embed = discord.Embed(
+            title=f"{TICK} Auto-Responder Updated!",
+            color=discord.Color.green()
         )
+        embed.add_field(name="When someone says:", value=f"`{trigger}`", inline=False)
+        embed.add_field(name="I will reply with:", value=response, inline=False)
+        await ctx.send(embed=embed)
 
     @keyword.command(name="remove", aliases=["delete"])
     @commands.has_permissions(manage_guild=True)
@@ -109,18 +124,31 @@ class Keywords(commands.Cog):
         trigger = trigger.strip().lower()
 
         if trigger not in self.keywords:
-            return await ctx.send(f"❌ `{trigger}` is not configured as an auto-response trigger.")
+            embed = discord.Embed(
+                description=f"{CROSS} `{trigger}` is not configured as an auto-response trigger.",
+                color=discord.Color.red()
+            )
+            return await ctx.send(embed=embed)
 
         del self.keywords[trigger]
         self.save_keywords()
-        await ctx.send(f"✅ Removed `{trigger}` from the auto-responder list.")
+
+        embed = discord.Embed(
+            description=f"{TICK} Removed `{trigger}` from the auto-responder list.",
+            color=discord.Color.green()
+        )
+        await ctx.send(embed=embed)
 
     @keyword.command(name="view", aliases=["list"])
     @commands.has_permissions(manage_guild=True)
     async def view_keywords(self, ctx):
         """Displays all running keywords configurations."""
         if not self.keywords:
-            return await ctx.send("The auto-responder keywords list is currently empty.")
+            embed = discord.Embed(
+                description="The auto-responder keywords list is currently empty.",
+                color=discord.Color.orange()
+            )
+            return await ctx.send(embed=embed)
 
         embed = discord.Embed(
             title="📋 Active Auto-Responder Keywords",
@@ -145,14 +173,22 @@ class Keywords(commands.Cog):
     @view_keywords.error
     async def keyword_error(self, ctx, error):
         if isinstance(error, commands.MissingPermissions):
-            await ctx.send("You need the Manage Server permission to change auto-responder settings.")
+            embed = discord.Embed(
+                description=f"{CROSS} You need the **Manage Server** permission to change auto-responder settings.",
+                color=discord.Color.red()
+            )
+            await ctx.send(embed=embed)
         
         elif isinstance(error, commands.MissingRequiredArgument):
-            await ctx.send(
-                f"❌ **Missing arguments!**\n"
-                f"Syntax: `{Config.PREFIX}keyword add [trigger] | [response]`\n"
-                f"Example: `{Config.PREFIX}keyword add help me | What do you need help with?`"
+            embed = discord.Embed(
+                title=f"{CROSS} Missing Arguments!",
+                description=(
+                    f"**Syntax:** `{Config.PREFIX}keyword add [trigger] | [response]`\n"
+                    f"**Example:** `{Config.PREFIX}keyword add help me | What do you need help with?`"
+                ),
+                color=discord.Color.red()
             )
+            await ctx.send(embed=embed)
         else:
             raise error
 
