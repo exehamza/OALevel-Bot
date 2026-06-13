@@ -19,7 +19,11 @@ class ConfessionModal(discord.ui.Modal, title="Submit a Confession"):
     )
 
     async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.send_message("Thank you! Your confession has been sent for review.", ephemeral=True)
+        success_embed = discord.Embed(
+            description="📬 **Thank you!** Your confession has been sent for review.",
+            color=discord.Color.green()
+        )
+        await interaction.response.send_message(embed=success_embed, ephemeral=True)
         
         approve_channel = interaction.guild.get_channel(Config.CONFESSION_APPROVE_ID)
         if not approve_channel:
@@ -47,12 +51,11 @@ class ConfessionSubmitView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="Submit a Confession", style=discord.ButtonStyle.primary, custom_id="submit_confession_btn", emoji="🤫")
+    @discord.ui.button(label="Submit a Confession", style=discord.ButtonStyle.primary, custom_id="submit_confession_btn", emoji="✉️")
     async def callback(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(ConfessionModal())
 
 
-# --- 3. THE APPROVAL/REJECTION BUTTONS VIEW ---
 # --- 3. THE APPROVAL/REJECTION BUTTONS VIEW ---
 class ConfessionApprovalView(discord.ui.View):
     def __init__(self):
@@ -70,7 +73,11 @@ class ConfessionApprovalView(discord.ui.View):
         try:
             confession_id = int(embed.footer.text.replace("Confession ID: ", ""))
         except (ValueError, AttributeError):
-            return await interaction.followup.send("❌ Error: Could not parse the Confession ID from this message.", ephemeral=True)
+            error_embed = discord.Embed(
+                description="<a:Cross:1514986232294281426> **Error:** Could not parse the Confession ID from this message.",
+                color=discord.Color.red()
+            )
+            return await interaction.followup.send(embed=error_embed, ephemeral=True)
 
         # 3. Post to the public confessions channel
         public_channel = interaction.guild.get_channel(Config.CONFESSIONS_ID)
@@ -91,7 +98,11 @@ class ConfessionApprovalView(discord.ui.View):
         if user_id:
             try:
                 user = await interaction.client.fetch_user(user_id)
-                await user.send("🎉 Your confession has been **approved** and published!")
+                dm_embed = discord.Embed(
+                    description="🎉 **Your confession has been approved and published!**",
+                    color=discord.Color.green()
+                )
+                await user.send(embed=dm_embed)
             except discord.Forbidden:
                 pass # User has DMs closed
             
@@ -99,8 +110,11 @@ class ConfessionApprovalView(discord.ui.View):
             del PENDING_CONFESSIONS[confession_id]
         else:
             # If the bot restarted, it won't find the user_id. 
-            # We log it to staff quietly via an ephemeral message so they know why no DM went out.
-            await interaction.followup.send("⚠️ Bot was restarted since submission. Confession approved publicly, but user could not be notified via DM.", ephemeral=True)
+            warn_embed = discord.Embed(
+                description="⚠️ **Bot was restarted since submission.** Confession approved publicly, but user could not be notified via DM.",
+                color=discord.Color.orange()
+            )
+            await interaction.followup.send(embed=warn_embed, ephemeral=True)
 
         # 5. Clean up and update the staff channel embed
         embed.title = f"✅ Confession #{confession_id} Approved"
@@ -117,20 +131,32 @@ class ConfessionApprovalView(discord.ui.View):
         try:
             confession_id = int(embed.footer.text.replace("Confession ID: ", ""))
         except (ValueError, AttributeError):
-            return await interaction.followup.send("❌ Error: Could not parse the Confession ID from this message.", ephemeral=True)
+            error_embed = discord.Embed(
+                description="<a:Cross:1514986232294281426> **Error:** Could not parse the Confession ID from this message.",
+                color=discord.Color.red()
+            )
+            return await interaction.followup.send(embed=error_embed, ephemeral=True)
 
         # Try to anonymously DM the user about the rejection
         user_id = PENDING_CONFESSIONS.get(confession_id)
         if user_id:
             try:
                 user = await interaction.client.fetch_user(user_id)
-                await user.send("❌ Sorry, your confession was **rejected** by the moderation team.")
+                dm_reject = discord.Embed(
+                    description="<a:Cross:1514986232294281426> **Sorry, your confession was rejected by the moderation team.**",
+                    color=discord.Color.red()
+                )
+                await user.send(embed=dm_reject)
             except discord.Forbidden:
                 pass
             
             del PENDING_CONFESSIONS[confession_id]
         else:
-            await interaction.followup.send("⚠️ Bot was restarted since submission. Confession rejected, but user could not be notified via DM.", ephemeral=True)
+            warn_embed = discord.Embed(
+                description="⚠️ **Bot was restarted since submission.** Confession rejected, but user could not be notified via DM.",
+                color=discord.Color.orange()
+            )
+            await interaction.followup.send(embed=warn_embed, ephemeral=True)
 
         # Clean up and update the staff channel embed
         embed.title = f"❌ Confession #{confession_id} Rejected"
@@ -150,22 +176,31 @@ class ConfessionCommands(commands.Cog):
         target_channel = ctx.guild.get_channel(Config.SUBMIT_CONFESSION_ID)
         
         if not target_channel:
-            return await ctx.send("Could not find the submit channel specified in config.")
+            error_embed = discord.Embed(
+                description="<a:Cross:1514986232294281426> **Could not find the submit channel specified in your config.**",
+                color=discord.Color.red()
+            )
+            return await ctx.send(embed=error_embed)
 
         embed = discord.Embed(
-            title="🤫 Share a Confession",
+            title="Share a Confession",
             description=(
                 "Got something on your mind? Share it completely anonymously!\n\n"
                 "**How it works:**\n"
-                "1️⃣ Click the button below.\n"
-                "2️⃣ Type out your confession in the pop-up box.\n"
-                "3️⃣ Submit it! It will be reviewed by staff before going public."
+                " - Click the button below.\n"
+                " - Type out your confession in the pop-up box.\n"
+                " - Submit it! It will be reviewed by staff before going public."
             ),
             color=discord.Color.blue()
         )
         
         await target_channel.send(embed=embed, view=ConfessionSubmitView())
-        await ctx.send(f"Confession prompt successfully setup in {target_channel.mention}!")
+        
+        setup_success = discord.Embed(
+            description=f"✅ **Confession prompt successfully setup in** {target_channel.mention}!",
+            color=discord.Color.green()
+        )
+        await ctx.send(embed=setup_success)
 
 async def setup(bot):
     await bot.add_cog(ConfessionCommands(bot))
