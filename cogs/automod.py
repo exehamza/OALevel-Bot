@@ -59,7 +59,7 @@ class AutoMod(commands.Cog):
                 file,
                 indent=2,
                 ensure_ascii=False,
-            )
+                )
             file.write("\n")
 
     def contains_swear_word(self, content):
@@ -79,7 +79,7 @@ class AutoMod(commands.Cog):
         if message.author.bot or message.guild is None:
             return
 
-        # NEW: Bypass check if the user is whitelisted
+        # Bypass check if the user is whitelisted
         if message.author.id in self.whitelisted_users:
             return
 
@@ -93,10 +93,11 @@ class AutoMod(commands.Cog):
             except discord.Forbidden:
                 return
 
-            await message.channel.send(
-                f"{message.author.mention}, that word is not allowed here.",
-                delete_after=10
+            warn_embed = discord.Embed(
+                description=f"<a:Cross:1514986232294281426> {message.author.mention}, **that word is not allowed here.**",
+                color=discord.Color.red()
             )
+            await message.channel.send(embed=warn_embed, delete_after=10)
 
     @commands.group(name="automod", invoke_without_command=True)
     @commands.has_permissions(manage_guild=True)
@@ -107,10 +108,10 @@ class AutoMod(commands.Cog):
             description="Manage your server filter dynamically using the subcommands below.",
             color=discord.Color.blue()
         )
-        embed.add_field(name="➕ Add Word", value=f"`{Config.PREFIX}automod add <word>`", inline=True)
-        embed.add_field(name="➖ Remove Word", value=f"`{Config.PREFIX}automod remove <word>`", inline=True)
-        embed.add_field(name="👁️ View Words", value=f"`{Config.PREFIX}automod view`", inline=True)
-        embed.add_field(name="😇 Whitelist User", value=f"`{Config.PREFIX}automod whitelist @user`", inline=False)
+        embed.add_field(name="Add Word", value=f"`{Config.PREFIX}automod add <word>`", inline=True)
+        embed.add_field(name="Remove Word", value=f"`{Config.PREFIX}automod remove <word>`", inline=True)
+        embed.add_field(name="View Words", value=f"`{Config.PREFIX}automod view`", inline=True)
+        embed.add_field(name="Whitelist User", value=f"`{Config.PREFIX}automod whitelist @user`", inline=False)
         await ctx.send(embed=embed)
 
     @automod.command(name="add")
@@ -120,14 +121,27 @@ class AutoMod(commands.Cog):
         word = word.strip().lower()
 
         if not word:
-            return await ctx.send("Please provide a word to block.")
+            embed = discord.Embed(
+                description="<a:Cross:1514986232294281426> **Please provide a word to block.**",
+                color=discord.Color.red()
+            )
+            return await ctx.send(embed=embed)
 
         if word in self.blocked_words:
-            return await ctx.send(f"`{word}` is already in the AutoMod list.")
+            embed = discord.Embed(
+                description=f"<a:Cross:1514986232294281426> `{word}` **is already in the AutoMod list.**",
+                color=discord.Color.red()
+            )
+            return await ctx.send(embed=embed)
 
         self.blocked_words.add(word)
         self.save_automod_data()
-        await ctx.send(f"✅ Added `{word}` to the AutoMod blocked word list.")
+        
+        embed = discord.Embed(
+            description=f"✅ **Added** `{word}` **to the AutoMod blocked word list.**",
+            color=discord.Color.green()
+        )
+        await ctx.send(embed=embed)
 
     @automod.command(name="remove", aliases=["delete"])
     @commands.has_permissions(manage_guild=True)
@@ -136,18 +150,31 @@ class AutoMod(commands.Cog):
         word = word.strip().lower()
 
         if word not in self.blocked_words:
-            return await ctx.send(f"❌ `{word}` is not currently in the AutoMod list.")
+            embed = discord.Embed(
+                description=f"<a:Cross:1514986232294281426> `{word}` **is not currently in the AutoMod list.**",
+                color=discord.Color.red()
+            )
+            return await ctx.send(embed=embed)
 
         self.blocked_words.remove(word)
         self.save_automod_data()
-        await ctx.send(f"✅ Removed `{word}` from the AutoMod blocked word list.")
+        
+        embed = discord.Embed(
+            description=f"✅ **Removed** `{word}` **from the AutoMod blocked word list.**",
+            color=discord.Color.green()
+        )
+        await ctx.send(embed=embed)
 
     @automod.command(name="view", aliases=["list"])
     @commands.has_permissions(manage_guild=True)
     async def view_swear_words(self, ctx):
         """Displays all words currently active on the block filter."""
         if not self.blocked_words:
-            return await ctx.send("The AutoMod blocked words list is currently empty.")
+            embed = discord.Embed(
+                description="🛡️ **The AutoMod blocked words list is currently empty.**",
+                color=discord.Color.blue()
+            )
+            return await ctx.send(embed=embed)
 
         sorted_words = sorted(self.blocked_words)
         words_string = ", ".join(f"`{word}`" for word in sorted_words)
@@ -155,10 +182,12 @@ class AutoMod(commands.Cog):
         if len(words_string) > 1900:
             with open("blocked_words_export.txt", "w", encoding="utf-8") as f:
                 f.write("\n".join(sorted_words))
-            return await ctx.send(
-                "The blocked words list is too long to display, exporting to text file:",
-                file=discord.File("blocked_words_export.txt")
+            
+            embed = discord.Embed(
+                description="📁 **The blocked words list is too long to display. Exporting to a file below:**",
+                color=discord.Color.orange()
             )
+            return await ctx.send(embed=embed, file=discord.File("blocked_words_export.txt"))
 
         embed = discord.Embed(
             title="🚫 Current AutoMod Blocked Words",
@@ -173,16 +202,28 @@ class AutoMod(commands.Cog):
     async def whitelist_user(self, ctx, member: discord.Member):
         """Toggles immunity status for a user explicitly."""
         if member.bot:
-            return await ctx.send("Bots are already bypassed automatically by AutoMod.")
+            embed = discord.Embed(
+                description="<a:Cross:1514986232294281426> **Bots are already bypassed automatically by AutoMod.**",
+                color=discord.Color.red()
+            )
+            return await ctx.send(embed=embed)
 
         if member.id in self.whitelisted_users:
             self.whitelisted_users.remove(member.id)
             self.save_automod_data()
-            await ctx.send(f"😇 Removed {member.mention} from the whitelist. They are now subject to the chat filter.")
+            embed = discord.Embed(
+                description=f"**Removed** {member.mention} **from the whitelist.** They are now subject to the chat filter.",
+                color=discord.Color.orange()
+            )
+            await ctx.send(embed=embed)
         else:
             self.whitelisted_users.add(member.id)
             self.save_automod_data()
-            await ctx.send(f"😇 Added {member.mention} to the whitelist. They can now say blocked words safely.")
+            embed = discord.Embed(
+                description=f"**Added** {member.mention} **to the whitelist.** They can now say blocked words safely.",
+                color=discord.Color.green()
+            )
+            await ctx.send(embed=embed)
 
     @automod.error
     @add_swear_word.error
@@ -191,11 +232,23 @@ class AutoMod(commands.Cog):
     @whitelist_user.error
     async def automod_error(self, ctx, error):
         if isinstance(error, commands.MissingPermissions):
-            await ctx.send("You need the Manage Server permission to change AutoMod settings.")
+            embed = discord.Embed(
+                description="<a:Cross:1514986232294281426> **You need the Manage Server permission to change AutoMod settings.**",
+                color=discord.Color.red()
+            )
+            await ctx.send(embed=embed)
         elif isinstance(error, commands.MissingRequiredArgument):
-            await ctx.send(f"Missing arguments. Run `{Config.PREFIX}automod` to see syntax rules.")
+            embed = discord.Embed(
+                description=f"<a:Cross:1514986232294281426> **Missing arguments.** Run `{Config.PREFIX}automod` to see syntax rules.",
+                color=discord.Color.red()
+            )
+            await ctx.send(embed=embed)
         elif isinstance(error, commands.BadArgument):
-            await ctx.send("Could not find that member. Please make sure to explicitly mention them.")
+            embed = discord.Embed(
+                description="<a:Cross:1514986232294281426> **Could not find that member.** Please make sure to explicitly mention them.",
+                color=discord.Color.red()
+            )
+            await ctx.send(embed=embed)
         else:
             raise error
 
