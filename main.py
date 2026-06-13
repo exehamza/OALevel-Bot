@@ -49,7 +49,16 @@ class ConfessionBot(commands.Bot):
         print("--------------------------------------------------")
 
 # 2. Instantiate the Bot instance
-bot = ConfessionBot(command_prefix=Config.PREFIX, intents=intents)
+# Pass the discord.Activity parameter directly here
+bot = ConfessionBot(
+    command_prefix=Config.PREFIX, 
+    intents=intents,
+    activity=discord.Activity(
+        type=discord.ActivityType.playing, 
+        name=f"{Config.PREFIX}help to get started"
+    ),
+    status=discord.Status.online
+)
 
 bot.help_command = None
 
