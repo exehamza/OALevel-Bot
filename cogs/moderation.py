@@ -61,14 +61,34 @@ class Moderation(commands.Cog):
         print("Moderation module loaded successfully.")
 
     # --- PURGE COMMAND ---
-    @commands.command(name="purge", help="Purges a set number of messages from the channel.")
+    @commands.command(name="purge", aliases=["clear"], help="Purges a set number of messages from the channel, optionally filtered by user.")
     @commands.guild_only()
     @commands.has_permissions(manage_messages=True)
     @commands.bot_has_permissions(manage_messages=True, read_message_history=True)
-    async def purge(self, ctx, amount: int):
-        if amount < 1:
+    async def purge(self, ctx, arg1: discord.Member | int = None, arg2: int = None):
+        """
+        Handles arguments:
+        - $purge <amount>
+        - $purge <member> <amount>
+        """
+        target_member = None
+        amount = 0
+
+        # Case 1: $purge <member> <amount>
+        if isinstance(arg1, discord.Member) and isinstance(arg2, int):
+            target_member = arg1
+            amount = arg2
+
+        # Case 2: $purge <amount>
+        elif isinstance(arg1, int):
+            amount = arg1
+
+        # Check if the arguments match any valid usage style
+        if amount <= 0:
             embed = discord.Embed(
-                description="<a:Cross:1514986232294281426> **Please provide a number greater than 0.**",
+                description="<a:Cross:1514986232294281426> **Invalid format or amount.** Use one of the following:\n"
+                            "`$purge [amount]`\n"
+                            "`$purge [@user] [amount]`",
                 color=discord.Color.red()
             )
             return await ctx.send(embed=embed, delete_after=5)
@@ -80,8 +100,21 @@ class Moderation(commands.Cog):
             )
             return await ctx.send(embed=embed, delete_after=5)
 
+        # Define a check filter if filtering by a specific user
+        def check_filter(message):
+            return message.author == target_member
+
         try:
-            deleted = await ctx.channel.purge(limit=amount + 1)
+            # If a user is targeted, we look back deeper (up to 500 messages) to find the requested quantity of their messages.
+            if target_member:
+                deleted = await ctx.channel.purge(limit=500, check=check_filter, bulk=True)
+                # Trim list if we found more user messages than they asked to delete
+                if len(deleted) > amount:
+                    deleted = deleted[:amount]
+            else:
+                # Include the command invocation message itself (+1)
+                deleted = await ctx.channel.purge(limit=amount + 1)
+
         except discord.Forbidden:
             embed = discord.Embed(
                 description="<a:Cross:1514986232294281426> **I need Manage Messages and Read Message History permissions in this channel.**",
@@ -90,27 +123,35 @@ class Moderation(commands.Cog):
             return await ctx.send(embed=embed, delete_after=7)
         except discord.HTTPException:
             embed = discord.Embed(
-                description="<a:Cross:1514986232294281426> **Discord refused the purge.** This can happen with very old messages or too many messages.",
+                description="<a:Cross:1514986232294281426> **Discord refused the purge.** This can happen with messages older than 14 days.",
                 color=discord.Color.red()
             )
             return await ctx.send(embed=embed, delete_after=7)
 
+        # Calculate exact count (disregard your command invocation message from the total count if user wasn't targeted)
+        actual_deleted = len(deleted)
+        if not target_member:
+            actual_deleted = max(0, actual_deleted - 1)
+
         embed_color = getattr(Config, "EMBED_COLOR", discord.Color.blue())
+        user_str = f" sent by {target_member.mention}" if target_member else ""
+        
         embed = discord.Embed(
-            description=f"Successfully deleted **{len(deleted) - 1}** messages.",
+            description=f"Successfully deleted **{actual_deleted}** messages{user_str}.",
             color=embed_color
         )
         await ctx.send(embed=embed, delete_after=5)
-        await self.send_mod_log(
-            ctx,
-            "Messages Purged",
-            0x3498db,
-            [
-                ("Channel", ctx.channel.mention, True),
-                ("Deleted Messages", str(len(deleted) - 1), True),
-                ("Moderator", ctx.author.mention, False),
-            ],
-        )
+
+        # Setup logging info
+        log_fields = [
+            ("Channel", ctx.channel.mention, True),
+            ("Deleted Messages", str(actual_deleted), True),
+            ("Moderator", ctx.author.mention, False)
+        ]
+        if target_member:
+            log_fields.insert(1, ("Target User", target_member.mention, True))
+
+        await self.send_mod_log(ctx, "Messages Purged", 0x3498db, log_fields)
 
     # --- KICK COMMAND ---
     @commands.command(name="kick", help="Kicks a member from the server.")

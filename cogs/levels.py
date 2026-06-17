@@ -1,6 +1,5 @@
 import io
 import math
-import random
 import sqlite3
 import aiohttp
 from PIL import Image, ImageDraw, ImageFont
@@ -50,6 +49,7 @@ class Leveling(commands.Cog):
             exp_gained = 15
             exp += exp_gained
             lvl = 0.1 * (math.sqrt(exp))
+            current_lvl_int = int(lvl)
             
             cursor.execute(
                 "UPDATE levels SET exp = ?, level = ? WHERE user_id = ? AND guild_id = ?",
@@ -57,25 +57,45 @@ class Leveling(commands.Cog):
             )
             database.commit()
             
-            if int(lvl) > last_lvl:
+            if current_lvl_int > last_lvl:
                 channel = self.bot.get_channel(Config.LEVEL_CHANNEL_ID)
                 if channel is None:
                     channel = message.channel
                 
-                await channel.send(f"Congratulations {message.author.mention}, you leveled up to level {int(lvl)}!")
+                await channel.send(f"Congratulations {message.author.mention}, you leveled up to level {current_lvl_int}!")
                 
                 cursor.execute(
                     "UPDATE levels SET last_lvl = ? WHERE user_id = ? AND guild_id = ?",
-                    (int(lvl), message.author.id, message.guild.id)
+                    (current_lvl_int, message.author.id, message.guild.id)
                 )
                 database.commit()
+
+                # --- AUTOMATIC ROLE ASSIGNMENT AT LEVEL 10 ---
+                if current_lvl_int >= 10:
+                    role = message.guild.get_role(Config.IMAGE_PERMS_ROLE_ID)
+                    if role and role not in message.author.roles:
+                        try:
+                            await message.author.add_roles(role)
+                            embed = discord.Embed(
+                                description=f"<:Tick:1514986183489360087> {message.author.mention} has unlocked the **{role.name}** role for reaching Level 10!",
+                                color=discord.Color.green()
+                            )
+                            await channel.send(embed=embed)
+                        except discord.Forbidden:
+                            print(f"[Leveling Error] Bot missing permissions to manage roles or role is higher than the bot's hierarchy.")
+                        except discord.HTTPException:
+                            print(f"[Leveling Error] Failed to update roles due to a network or API issue.")
     
     @commands.command(name="level", aliases=["rank"], description="Check your level or someone else's level")
     async def level(self, ctx, member: discord.Member = None):
         target = member or ctx.author
         
         if target.bot:
-            return await ctx.send("Bots do not have levels!")
+            embed = discord.Embed(
+                description="<a:Cross:1514986232294281426> Bots do not have levels!",
+                color=discord.Color.red()
+            )
+            return await ctx.send(embed=embed)
 
         rank = 1
         cursor.execute("SELECT user_id FROM levels WHERE guild_id = ? ORDER BY exp DESC", (ctx.guild.id,))
@@ -113,7 +133,11 @@ class Leveling(commands.Cog):
         try:
             base_card = Image.open("rank_card.png").convert("RGBA")
         except FileNotFoundError:
-            return await ctx.send("⚠️ Error: System background assets are missing. Contact an Admin!")
+            embed = discord.Embed(
+                description="<a:Cross:1514986232294281426> Error: System background assets are missing. Contact an Admin!",
+                color=discord.Color.red()
+            )
+            return await ctx.send(embed=embed)
 
         draw = ImageDraw.Draw(base_card)
         username = f"@{target.name}"
@@ -194,7 +218,6 @@ class Leveling(commands.Cog):
 
     @commands.command(name="leaderboard", aliases=["lb"], description="Display the top server members")
     async def leaderboard(self, ctx):
-        # 1. Fetch Top 10 rows from database for the specific server guild
         cursor.execute(
             "SELECT user_id, level, exp FROM levels WHERE guild_id = ? ORDER BY exp DESC LIMIT 10",
             (ctx.guild.id,)
@@ -202,24 +225,23 @@ class Leveling(commands.Cog):
         top_entries = cursor.fetchall()
 
         if not top_entries:
-            return await ctx.send("No data found for this server's leaderboard yet!")
+            embed = discord.Embed(
+                description="<a:Cross:1514986232294281426> No data found for this server's leaderboard yet!",
+                color=discord.Color.red()
+            )
+            return await ctx.send(embed=embed)
 
-        # Layout Dimensions
         row_w, row_h = 680, 72
         row_gap = 6
-        
-        # Calculate height dynamically based on real items returned
         total_height = len(top_entries) * (row_h + row_gap) - row_gap
         leaderboard_canvas = Image.new("RGBA", (row_w, total_height), (0, 0, 0, 0))
 
-        # Core positioning markers inside the 680x72 block
         X_RANK = 20
         X_AVATAR = 75
         X_NAME = 145
         X_STATS = 480
         CENTER_Y = row_h // 2
 
-        # Font assignments with clean system fallbacks
         try:
             font_rank = ImageFont.truetype("arialbd.ttf", 26)
             font_name = ImageFont.truetype("arialbd.ttf", 22)
@@ -232,13 +254,11 @@ class Leveling(commands.Cog):
             except IOError:
                 font_rank = font_name = font_stats = ImageFont.load_default()
 
-        # 2. Iterate and process rows
         async with aiohttp.ClientSession() as session:
             for index, entry in enumerate(top_entries):
                 user_id, level, exp = entry
                 rank_num = index + 1
 
-                # Generate base strip container
                 try:
                     row_card = Image.open("lb_card.png").convert("RGBA")
                     if row_card.size != (row_w, row_h):
@@ -248,13 +268,11 @@ class Leveling(commands.Cog):
 
                 draw = ImageDraw.Draw(row_card)
 
-                # A. Write Rank Number
                 rank_text = f"#{rank_num}"
                 rank_colors = [(255, 215, 0, 255), (170, 180, 195, 255), (205, 127, 50, 255)]
                 rank_color = rank_colors[index] if index < 3 else (200, 200, 200, 255)
                 draw.text((X_RANK, CENTER_Y - 16), rank_text, fill=rank_color, font=font_rank)
 
-                # B. Dynamic Username Resolver
                 member = ctx.guild.get_member(user_id)
                 display_name = f"@{member.name}" if member else f"User_{str(user_id)[-4:]}"
 
@@ -262,11 +280,9 @@ class Leveling(commands.Cog):
                     display_name = display_name[:15] + "..."
                 draw.text((X_NAME, CENTER_Y - 14), display_name, fill=(255, 255, 255, 255), font=font_name)
 
-                # C. Write Level and Experience values
                 stats_text = f"Lvl {int(level)} • {exp:,} XP"
                 draw.text((X_STATS, CENTER_Y - 11), stats_text, fill=(150, 155, 165, 255), font=font_stats)
 
-                # D. Asynchronously fetch live profile picture
                 avatar_size = (50, 50)
                 avatar_y = CENTER_Y - (avatar_size[1] // 2)
                 avatar_pasted = False
@@ -291,36 +307,215 @@ class Leveling(commands.Cog):
                 if not avatar_pasted:
                     draw.ellipse([X_AVATAR, avatar_y, X_AVATAR + 50, avatar_y + 50], fill=(120, 125, 135, 255))
 
-                # Assemble onto master canvas sheet
                 y_position = index * (row_h + row_gap)
                 leaderboard_canvas.paste(row_card, (0, y_position))
 
-        # 3. Buffer up the finished image sheet
         final_buffer = io.BytesIO()
         leaderboard_canvas.save(final_buffer, format="PNG")
         final_buffer.seek(0)
 
-        # 4. Create the Discord File with a clean name
         filename = "leaderboard.png"
         discord_file = discord.File(fp=final_buffer, filename=filename)
 
-        # 5. Build the Discord Embed
-        # Sets the header text to the Server's Name
         embed = discord.Embed(
             title=f"🏆 {ctx.guild.name} Leaderboard",
             description="Here are the top active members in the server!",
             color=discord.Color.gold()
         )
         
-        # Optional: Add the server icon to the top right of the embed if it exists
         if ctx.guild.icon:
             embed.set_thumbnail(url=ctx.guild.icon.url)
             
-        # Bind the image to the embed via the attachment protocol
         embed.set_image(url=f"attachment://{filename}")
-
-        # Send both together!
         await ctx.send(file=discord_file, embed=embed)
 
+    # --- XP MANAGEMENT GROUP COMMANDS WITH EMBEDS ---
+    @commands.group(name="xp", invoke_without_command=True, description="Manage user XP settings")
+    @commands.has_permissions(administrator=True)
+    async def xp(self, ctx):
+        """Root command for managing user XP values."""
+        embed = discord.Embed(
+            description="<a:Cross:1514986232294281426> Incomplete statement. Use:\n`$xp add @user <amount>`\n`$xp remove @user <amount>`",
+            color=discord.Color.red()
+        )
+        await ctx.send(embed=embed)
+
+    @xp.command(name="add")
+    @commands.has_permissions(administrator=True)
+    async def xp_add(self, ctx, member: discord.Member, amount: int):
+        """Adds a specific amount of XP to a user."""
+        if member.bot:
+            embed = discord.Embed(
+                description="<a:Cross:1514986232294281426> You cannot modify XP for bots.",
+                color=discord.Color.red()
+            )
+            return await ctx.send(embed=embed)
+            
+        if amount <= 0:
+            embed = discord.Embed(
+                description="<a:Cross:1514986232294281426> Please provide a positive number of XP to add.",
+                color=discord.Color.red()
+            )
+            return await ctx.send(embed=embed)
+
+        try:
+            cursor.execute(
+                "SELECT exp FROM levels WHERE user_id = ? AND guild_id = ?",
+                (member.id, ctx.guild.id)
+            )
+            result = cursor.fetchone()
+
+            if result is None:
+                new_exp = amount
+                new_lvl = 0.1 * (math.sqrt(new_exp))
+                cursor.execute(
+                    "INSERT INTO levels (user_id, guild_id, exp, level, last_lvl) VALUES(?, ?, ?, ?, ?)",
+                    (member.id, ctx.guild.id, new_exp, new_lvl, int(new_lvl))
+                )
+            else:
+                new_exp = result[0] + amount
+                new_lvl = 0.1 * (math.sqrt(new_exp))
+                cursor.execute(
+                    "UPDATE levels SET exp = ?, level = ?, last_lvl = ? WHERE user_id = ? AND guild_id = ?",
+                    (new_exp, new_lvl, int(new_lvl), member.id, ctx.guild.id)
+                )
+            database.commit()
+        except sqlite3.Error as e:
+            embed = discord.Embed(
+                description=f"<a:Cross:1514986232294281426> Database error: `{e}`",
+                color=discord.Color.red()
+            )
+            return await ctx.send(embed=embed)
+        
+        # --- DYNAMIC ROLE CHECK FOR ADMIN ADJUSTMENTS ---
+        if int(new_lvl) >= 10:
+            role = ctx.guild.get_role(Config.IMAGE_PERMS_ROLE_ID)
+            if role and role not in member.roles:
+                try:
+                    await member.add_roles(role)
+                except discord.Forbidden:
+                    pass
+
+        embed = discord.Embed(
+            description=f"<:Tick:1514986183489360087> Added **{amount:,} XP** to {member.mention}.\nThey are now **Level {int(new_lvl)}** ({new_exp:,} Total XP).",
+            color=discord.Color.green()
+        )
+        await ctx.send(embed=embed)
+
+    @xp.command(name="remove")
+    @commands.has_permissions(administrator=True)
+    async def xp_remove(self, ctx, member: discord.Member, amount: int):
+        """Removes a specific amount of XP from a user."""
+        if member.bot:
+            embed = discord.Embed(
+                description="<a:Cross:1514986232294281426> Bots do not process tracking structures.",
+                color=discord.Color.red()
+            )
+            return await ctx.send(embed=embed)
+            
+        if amount <= 0:
+            embed = discord.Embed(
+                description="<a:Cross:1514986232294281426> Please provide a positive number of XP to subtract.",
+                color=discord.Color.red()
+            )
+            return await ctx.send(embed=embed)
+
+        try:
+            cursor.execute(
+                "SELECT exp FROM levels WHERE user_id = ? AND guild_id = ?",
+                (member.id, ctx.guild.id)
+            )
+            result = cursor.fetchone()
+
+            if result is None or result[0] <= 0:
+                embed = discord.Embed(
+                    description=f"<a:Cross:1514986232294281426> {member.mention} has no experience points to remove.",
+                    color=discord.Color.red()
+                )
+                return await ctx.send(embed=embed)
+
+            new_exp = max(0, result[0] - amount)
+            new_lvl = 0.1 * (math.sqrt(new_exp))
+
+            cursor.execute(
+                "UPDATE levels SET exp = ?, level = ?, last_lvl = ? WHERE user_id = ? AND guild_id = ?",
+                (new_exp, new_lvl, int(new_lvl), member.id, ctx.guild.id)
+            )
+            database.commit()
+        except sqlite3.Error as e:
+            embed = discord.Embed(
+                description=f"<a:Cross:1514986232294281426> Database error: `{e}`",
+                color=discord.Color.red()
+            )
+            return await ctx.send(embed=embed)
+        
+        # Strip role if removal drops them below level 10
+        if int(new_lvl) < 10:
+            role = ctx.guild.get_role(Config.IMAGE_PERMS_ROLE_ID)
+            if role and role in member.roles:
+                try:
+                    await member.remove_roles(role)
+                except discord.Forbidden:
+                    pass
+
+        embed = discord.Embed(
+            description=f"<:Tick:1514986183489360087> Removed **{amount:,} XP** from {member.mention}.\nThey are now **Level {int(new_lvl)}** ({new_exp:,} Total XP).",
+            color=discord.Color.green()
+        )
+        await ctx.send(embed=embed)
+
+    @xp.error
+    async def xp_error(self, ctx, error):
+        if isinstance(error, commands.MissingPermissions):
+            embed = discord.Embed(
+                description="<a:Cross:1514986232294281426> You need to be an **Administrator** to modify user experience values.",
+                color=discord.Color.red()
+            )
+            await ctx.send(embed=embed)
+
+    @xp_add.error
+    async def xp_add_error(self, ctx, error):
+        if isinstance(error, commands.MissingPermissions):
+            embed = discord.Embed(
+                description="<a:Cross:1514986232294281426> You need to be an **Administrator** to modify user experience values.",
+                color=discord.Color.red()
+            )
+            await ctx.send(embed=embed)
+        elif isinstance(error, (commands.MissingRequiredArgument, commands.BadArgument)):
+            embed = discord.Embed(
+                description="<a:Cross:1514986232294281426> Invalid Format. Usage: `$xp add @user <amount>`",
+                color=discord.Color.red()
+            )
+            await ctx.send(embed=embed)
+        else:
+            embed = discord.Embed(
+                description=f"<a:Cross:1514986232294281426> An unexpected error occurred: `{error}`",
+                color=discord.Color.red()
+            )
+            await ctx.send(embed=embed)
+
+    @xp_remove.error
+    async def xp_remove_error(self, ctx, error):
+        if isinstance(error, commands.MissingPermissions):
+            embed = discord.Embed(
+                description="<a:Cross:1514986232294281426> You need to be an **Administrator** to modify user experience values.",
+                color=discord.Color.red()
+            )
+            await ctx.send(embed=embed)
+        elif isinstance(error, (commands.MissingRequiredArgument, commands.BadArgument)):
+            embed = discord.Embed(
+                description="<a:Cross:1514986232294281426> Invalid Format. Usage: `$xp remove @user <amount>`",
+                color=discord.Color.red()
+            )
+            await ctx.send(embed=embed)
+        else:
+            embed = discord.Embed(
+                description=f"<a:Cross:1514986232294281426> An unexpected error occurred: `{error}`",
+                color=discord.Color.red()
+            )
+            await ctx.send(embed=embed)
+
+
+# --- FIXED: SETUP IS OUTSIDE THE CLASS NOW ---
 async def setup(bot):
     await bot.add_cog(Leveling(bot))

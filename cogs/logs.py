@@ -241,7 +241,7 @@ class Logs(commands.Cog):
     @snipe.error
     async def snipe_error(self, ctx, error):
         if isinstance(error, (commands.MissingPermissions, commands.MissingAnyRole)):
-            await ctx.send("This command is classified. Only Admins and Moderators can snipe deleted messages.")
+            await ctx.send("This command is classified. Only Management members can snipe deleted messages.")
         elif isinstance(error, commands.BadArgument):
             await ctx.send(f"Invalid syntax! Use `{Config.PREFIX}snipe` for the most recent message, or `{Config.PREFIX}snipe 2` for older ones.")
         else:
