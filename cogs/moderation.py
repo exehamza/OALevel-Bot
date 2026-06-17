@@ -101,16 +101,24 @@ class Moderation(commands.Cog):
             return await ctx.send(embed=embed, delete_after=5)
 
         # Define a check filter if filtering by a specific user
+        # Define a tracking counter and the check filter
+        deleted_count = 0
+
         def check_filter(message):
-            return message.author == target_member
+            nonlocal deleted_count
+            # If we've already matched the requested amount, stop matching messages
+            if deleted_count >= amount + 1:  # +1 to account for the command invocation message
+                return False
+            
+            if message.author == target_member:
+                deleted_count += 1
+                return True
+            return False
 
         try:
-            # If a user is targeted, we look back deeper (up to 500 messages) to find the requested quantity of their messages.
             if target_member:
+                # The check_filter now safely caps the deletions at the exact amount requested
                 deleted = await ctx.channel.purge(limit=500, check=check_filter, bulk=True)
-                # Trim list if we found more user messages than they asked to delete
-                if len(deleted) > amount:
-                    deleted = deleted[:amount]
             else:
                 # Include the command invocation message itself (+1)
                 deleted = await ctx.channel.purge(limit=amount + 1)
