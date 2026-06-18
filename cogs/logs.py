@@ -3,7 +3,7 @@ from collections import defaultdict, deque
 from datetime import datetime, timezone
 import discord
 from discord.ext import commands
-
+from discord import utils
 from config import Config
 
 # PURGE LOGS
@@ -61,7 +61,7 @@ class Logs(commands.Cog):
             description=f"**{len(messages)}** messages were bulk deleted in {messages[0].channel.mention}.",
             color=Config.EMBED_COLOR
         )
-        embed.set_timestamp()
+        embed.timestamp = utils.utcnow()
         await log_channel.send(embed=embed)
 
     # --- 2. BAN LOGGING ---
@@ -88,7 +88,7 @@ class Logs(commands.Cog):
         embed.add_field(name="Responsible Moderator", value=moderator, inline=True)
         embed.add_field(name="Reason", value=reason, inline=True)
         embed.set_thumbnail(url=user.display_avatar.url)
-        embed.set_timestamp()
+        embed.timestamp = utils.utcnow()
         await log_channel.send(embed=embed)
 
     # --- 3. UNBAN LOGGING ---
@@ -110,7 +110,7 @@ class Logs(commands.Cog):
         embed = discord.Embed(title="Member Unbanned", color=0x2ecc71)
         embed.add_field(name="User Info", value=f"{user.name}\nID: {user.id}", inline=False)
         embed.add_field(name="Responsible Moderator", value=moderator, inline=False)
-        embed.set_timestamp()
+        embed.timestamp = utils.utcnow()
         await log_channel.send(embed=embed)
 
     # --- 4. KICK, MUTE & UNMUTE LOGGING ---
@@ -138,13 +138,13 @@ class Logs(commands.Cog):
                 embed.add_field(name="User", value=after.mention, inline=False)
                 embed.add_field(name="Moderator", value=moderator, inline=True)
                 embed.add_field(name="Reason", value=reason, inline=True)
-                embed.set_timestamp()
+                embed.timestamp = utils.utcnow()
                 await log_channel.send(embed=embed)
             else:
                 embed = discord.Embed(title="Member Unmuted (Timeout Removed)", color=0x2ecc71)
                 embed.add_field(name="User", value=after.mention, inline=False)
                 embed.add_field(name="Moderator", value=moderator, inline=False)
-                embed.set_timestamp()
+                embed.timestamp = utils.utcnow()
                 await log_channel.send(embed=embed)
 
     # FIXED: Indented properly to sit INSIDE the Logs class wrapper
@@ -167,7 +167,7 @@ class Logs(commands.Cog):
                         embed.add_field(name="User Info", value=f"{member.mention} ({member.name})\nID: {member.id}", inline=False)
                         embed.add_field(name="Responsible Moderator", value=entry.user.mention, inline=True)
                         embed.add_field(name="Reason", value=entry.reason or "No reason specified", inline=True)
-                        embed.set_timestamp()
+                        embed.timestamp = utils.utcnow()
                         
                         await log_channel.send(embed=embed)
                         return
