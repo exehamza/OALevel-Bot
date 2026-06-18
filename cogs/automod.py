@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import datetime
 import discord
 from discord.ext import commands
 from config import Config
@@ -11,6 +12,10 @@ class AutoMod(commands.Cog):
         self.bot = bot
         self.blocked_words = set()
         self.whitelisted_users = set()  # Tracks user IDs exempt from AutoMod
+        
+        # New dictionary to track violation timestamps: {user_id: [datetime, datetime...]}
+        self.infractions = {} 
+        
         self.load_automod_data()
 
     def load_automod_data(self):
@@ -93,8 +98,43 @@ class AutoMod(commands.Cog):
             except discord.Forbidden:
                 return
 
+            # --- VIOLATION TRACKING LOGIC ---
+            now = datetime.datetime.utcnow()
+            user_id = message.author.id
+
+            if user_id not in self.infractions:
+                self.infractions[user_id] = []
+
+            # 1. Clear out violation records older than 2 minutes (rolling window)
+            self.infractions[user_id] = [
+                timestamp for timestamp in self.infractions[user_id]
+                if now - timestamp < datetime.timedelta(minutes=2)
+            ]
+
+            # 2. Add current violation timestamp
+            self.infractions[user_id].append(now)
+
+            # 3. Check if violations hit 5 within the timeframe
+            if len(self.infractions[user_id]) >= 5:
+                # Clear tracking list for this user so it restarts clean after timeout
+                self.infractions[user_id] = []
+                
+                try:
+                    # Apply a 30-minute native Discord timeout
+                    await message.author.timeout(datetime.timedelta(minutes=30), reason="AutoMod: Exceeded word filter limits.")
+                    
+                    mute_embed = discord.Embed(
+                        description=f"🚫 {message.author.mention} **has been muted for 30 minutes for repeating blacklisted language.**",
+                        color=discord.Color.red()
+                    )
+                    return await message.channel.send(embed=mute_embed)
+                except discord.Forbidden:
+                    # In case the bot lacks role hierarchy power over the targeted member
+                    pass
+
+            # Fallback normal message warning if under 5 violations
             warn_embed = discord.Embed(
-                description=f"<a:Cross:1514986232294281426> {message.author.mention}, **that word is not allowed here.**",
+                description=f"<a:Cross:1514986232294281426> {message.author.mention}, **that word is not allowed here.** ({len(self.infractions[user_id])}/5)",
                 color=discord.Color.red()
             )
             await message.channel.send(embed=warn_embed, delete_after=10)

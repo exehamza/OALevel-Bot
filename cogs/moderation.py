@@ -66,24 +66,15 @@ class Moderation(commands.Cog):
     @commands.has_permissions(manage_messages=True)
     @commands.bot_has_permissions(manage_messages=True, read_message_history=True)
     async def purge(self, ctx, arg1: discord.Member | int = None, arg2: int = None):
-        """
-        Handles arguments:
-        - $purge <amount>
-        - $purge <member> <amount>
-        """
         target_member = None
         amount = 0
 
-        # Case 1: $purge <member> <amount>
         if isinstance(arg1, discord.Member) and isinstance(arg2, int):
             target_member = arg1
             amount = arg2
-
-        # Case 2: $purge <amount>
         elif isinstance(arg1, int):
             amount = arg1
 
-        # Check if the arguments match any valid usage style
         if amount <= 0:
             embed = discord.Embed(
                 description="<a:Cross:1514986232294281426> **Invalid format or amount.** Use one of the following:\n"
@@ -91,25 +82,25 @@ class Moderation(commands.Cog):
                             "`$purge [@user] [amount]`",
                 color=discord.Color.red()
             )
-            return await ctx.send(embed=embed, delete_after=5)
+            try: await ctx.message.delete()
+            except discord.HTTPException: pass
+            return await ctx.send(embed=embed)
 
         if amount > 100:
             embed = discord.Embed(
                 description="<a:Cross:1514986232294281426> **Please purge 100 messages or fewer at a time.**",
                 color=discord.Color.red()
             )
-            return await ctx.send(embed=embed, delete_after=5)
+            try: await ctx.message.delete()
+            except discord.HTTPException: pass
+            return await ctx.send(embed=embed)
 
-        # Define a check filter if filtering by a specific user
-        # Define a tracking counter and the check filter
         deleted_count = 0
 
         def check_filter(message):
             nonlocal deleted_count
-            # If we've already matched the requested amount, stop matching messages
-            if deleted_count >= amount + 1:  # +1 to account for the command invocation message
+            if deleted_count >= amount:
                 return False
-            
             if message.author == target_member:
                 deleted_count += 1
                 return True
@@ -117,29 +108,26 @@ class Moderation(commands.Cog):
 
         try:
             if target_member:
-                # The check_filter now safely caps the deletions at the exact amount requested
+                try: await ctx.message.delete()
+                except discord.HTTPException: pass
                 deleted = await ctx.channel.purge(limit=500, check=check_filter, bulk=True)
+                actual_deleted = len(deleted)
             else:
-                # Include the command invocation message itself (+1)
                 deleted = await ctx.channel.purge(limit=amount + 1)
+                actual_deleted = max(0, len(deleted) - 1)
 
         except discord.Forbidden:
             embed = discord.Embed(
                 description="<a:Cross:1514986232294281426> **I need Manage Messages and Read Message History permissions in this channel.**",
                 color=discord.Color.red()
             )
-            return await ctx.send(embed=embed, delete_after=7)
+            return await ctx.send(embed=embed)
         except discord.HTTPException:
             embed = discord.Embed(
                 description="<a:Cross:1514986232294281426> **Discord refused the purge.** This can happen with messages older than 14 days.",
                 color=discord.Color.red()
             )
-            return await ctx.send(embed=embed, delete_after=7)
-
-        # Calculate exact count (disregard your command invocation message from the total count if user wasn't targeted)
-        actual_deleted = len(deleted)
-        if not target_member:
-            actual_deleted = max(0, actual_deleted - 1)
+            return await ctx.send(embed=embed)
 
         embed_color = getattr(Config, "EMBED_COLOR", discord.Color.blue())
         user_str = f" sent by {target_member.mention}" if target_member else ""
@@ -148,9 +136,8 @@ class Moderation(commands.Cog):
             description=f"Successfully deleted **{actual_deleted}** messages{user_str}.",
             color=embed_color
         )
-        await ctx.send(embed=embed, delete_after=5)
+        await ctx.send(embed=embed)
 
-        # Setup logging info
         log_fields = [
             ("Channel", ctx.channel.mention, True),
             ("Deleted Messages", str(actual_deleted), True),
@@ -166,6 +153,9 @@ class Moderation(commands.Cog):
     @commands.has_permissions(kick_members=True)
     @commands.bot_has_permissions(kick_members=True)
     async def kick(self, ctx, member: discord.Member, *, reason: str = "No reason provided"):
+        try: await ctx.message.delete()
+        except discord.HTTPException: pass
+
         if member.top_role >= ctx.author.top_role and ctx.author != ctx.guild.owner:
             embed = discord.Embed(
                 description="<a:Cross:1514986232294281426> **You cannot kick someone with an equal or higher administrative role than yourself.**",
@@ -173,7 +163,6 @@ class Moderation(commands.Cog):
             )
             return await ctx.send(embed=embed)
 
-        # DM the user FIRST before kicking
         dm_embed = discord.Embed(
             title=f"👟 You have been kicked from {ctx.guild.name}",
             color=0xe67e22,
@@ -183,9 +172,8 @@ class Moderation(commands.Cog):
         try:
             await member.send(embed=dm_embed)
         except discord.Forbidden:
-            pass  # User has DMs disabled or blocked the bot
+            pass
 
-        # Perform the kick action
         await member.kick(reason=reason)
 
         embed = discord.Embed(title="Member Kicked", color=Config.EMBED_COLOR)
@@ -195,23 +183,26 @@ class Moderation(commands.Cog):
         embed.timestamp = datetime.datetime.utcnow()
 
         await ctx.send(embed=embed)
-
-        if hasattr(Config, "LOG_CHANNEL_ID") and Config.LOG_CHANNEL_ID:
-            log_channel = ctx.guild.get_channel(Config.LOG_CHANNEL_ID)
-            if not log_channel:
-                try:
-                    log_channel = await ctx.guild.fetch_channel(Config.LOG_CHANNEL_ID)
-                except discord.HTTPException:
-                    log_channel = None
-
-            if log_channel:
-                await log_channel.send(embed=embed)
+        
+        await self.send_mod_log(
+            ctx, 
+            "Member Kicked", 
+            0xe67e22, 
+            [
+                ("User", f"{member.mention} ({member.id})", False),
+                ("Moderator", ctx.author.mention, True),
+                ("Reason", reason, True)
+            ]
+        )
 
     # --- BAN COMMAND ---
     @commands.command(name="ban", help="Bans a member from the server.")
     @commands.has_permissions(ban_members=True)
     @commands.bot_has_permissions(ban_members=True)
     async def ban(self, ctx, member: discord.Member, *, reason: str = "No reason provided"):
+        try: await ctx.message.delete()
+        except discord.HTTPException: pass
+
         if member.top_role >= ctx.author.top_role and ctx.author != ctx.guild.owner:
             embed = discord.Embed(
                 description="<a:Cross:1514986232294281426> **You cannot ban someone with an equal or higher administrative role than yourself.**",
@@ -219,7 +210,6 @@ class Moderation(commands.Cog):
             )
             return await ctx.send(embed=embed)
 
-        # DM the user FIRST before banning
         dm_embed = discord.Embed(
             title=f"🔨 You have been permanently banned from {ctx.guild.name}",
             color=0xe74c3c,
@@ -256,6 +246,9 @@ class Moderation(commands.Cog):
     @commands.has_permissions(ban_members=True)
     @commands.bot_has_permissions(ban_members=True)
     async def unban(self, ctx, *, user_spec: str):
+        try: await ctx.message.delete()
+        except discord.HTTPException: pass
+
         async for ban_entry in ctx.guild.bans(limit=1000):
             user = ban_entry.user
 
@@ -291,6 +284,9 @@ class Moderation(commands.Cog):
     @commands.has_permissions(moderate_members=True)
     @commands.bot_has_permissions(moderate_members=True)
     async def mute(self, ctx, member: discord.Member, duration: str, *, reason: str = "No reason provided"):
+        try: await ctx.message.delete()
+        except discord.HTTPException: pass
+
         minutes = self.parse_duration(duration)
         if minutes is None:
             embed = discord.Embed(
@@ -320,7 +316,6 @@ class Moderation(commands.Cog):
             )
             return await ctx.send(embed=embed)
 
-        # DM the user before applying the timeout
         dm_embed = discord.Embed(
             title=f"🔇 You have been muted in {ctx.guild.name}",
             color=0xf39c12,
@@ -361,6 +356,9 @@ class Moderation(commands.Cog):
     @commands.has_permissions(moderate_members=True)
     @commands.bot_has_permissions(moderate_members=True)
     async def unmute(self, ctx, member: discord.Member, *, reason: str = "No reason provided"):
+        try: await ctx.message.delete()
+        except discord.HTTPException: pass
+
         if not member.is_timed_out():
             embed = discord.Embed(
                 description=f"<a:Cross:1514986232294281426> {member.mention} **is not currently muted.**",
@@ -375,7 +373,6 @@ class Moderation(commands.Cog):
             )
             return await ctx.send(embed=embed)
 
-        # DM the user that they have been unmuted
         dm_embed = discord.Embed(
             title=f"🔊 Your mute has been removed in {ctx.guild.name}",
             color=0x2ecc71,
