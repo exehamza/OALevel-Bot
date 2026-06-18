@@ -55,7 +55,7 @@ bot = ConfessionBot(
     intents=intents,
     activity=discord.Activity(
         type=discord.ActivityType.playing, 
-        name=f"{Config.PREFIX}help to get started"
+        name=f"To open a ticket, send a message"
     ),
     status=discord.Status.online
 )
