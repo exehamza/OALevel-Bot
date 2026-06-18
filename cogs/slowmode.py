@@ -2,16 +2,16 @@ import discord
 from discord.ext import commands
 import re
 
-
 class SlowmodeCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        # ADD YOUR MODERATOR/STAFF ROLE IDs HERE
+        self.ALLOWED_ROLE_IDS = [1256124924356071463]
 
     def parse_slowmode_duration(self, duration_text):
         """Converts human time strings (e.g., 5s, 2m, 1h) into integers of seconds."""
         duration_text = duration_text.strip().lower()
         
-        # If the user just typed numbers, default it to seconds
         if duration_text.isdigit():
             return int(duration_text)
             
@@ -32,14 +32,24 @@ class SlowmodeCog(commands.Cog):
 
     @commands.command(name="slowmode", aliases=["sm"], help="Sets or clears the channel slowmode. Usage: $sm 5s / $sm 0")
     @commands.guild_only()
-    @commands.has_permissions(manage_channels=True)
-    @commands.bot_has_permissions(manage_channels=True)
+    @commands.bot_has_permissions(manage_channels=True) # Bot still needs this to perform the action
     async def slowmode(self, ctx, duration: str = None):
         # Delete the trigger message right away
         try:
             await ctx.message.delete()
         except discord.HTTPException:
             pass
+
+        # Custom Role Check: Verify if user has an allowed role or is an Admin/Server Owner
+        user_roles = [role.id for role in ctx.author.roles]
+        has_bypass_role = any(role_id in self.ALLOWED_ROLE_IDS for role_id in user_roles)
+        
+        if not has_bypass_role and not ctx.author.guild_permissions.administrator and ctx.author != ctx.guild.owner:
+            embed = discord.Embed(
+                description="<a:Cross:1514986232294281426> **You do not have the required Staff role to use this command.**",
+                color=discord.Color.red()
+            )
+            return await ctx.send(embed=embed)
 
         # If no argument is provided, display current channel status
         if duration is None:
@@ -66,7 +76,6 @@ class SlowmodeCog(commands.Cog):
             )
             return await ctx.send(embed=embed)
 
-        # Discord handles slowmode up to 6 hours (21600 seconds)
         if seconds > 21600:
             embed = discord.Embed(
                 description="<a:Cross:1514986232294281426> **You cannot set a slowmode higher than 6 hours (6h).**",
@@ -96,7 +105,6 @@ class SlowmodeCog(commands.Cog):
             )
             await ctx.send(embed=embed)
 
-    # Error handling specific to this command
     @slowmode.error
     async def slowmode_error(self, ctx, error):
         try:
@@ -104,12 +112,7 @@ class SlowmodeCog(commands.Cog):
         except discord.HTTPException:
             pass
 
-        if isinstance(error, commands.MissingPermissions):
-            embed = discord.Embed(
-                description="<a:Cross:1514986232294281426> **You do not have the Manage Channels permission to change slowmode parameters.**",
-                color=discord.Color.red()
-            )
-        elif isinstance(error, commands.BotMissingPermissions):
+        if isinstance(error, commands.BotMissingPermissions):
             embed = discord.Embed(
                 description="<a:Cross:1514986232294281426> **I require the Manage Channels permission to alter slowmode parameters.**",
                 color=discord.Color.red()
