@@ -1,5 +1,6 @@
 import datetime
 import re
+import sqlite3
 import discord
 from discord.ext import commands
 from config import Config
@@ -7,6 +8,39 @@ from config import Config
 class Moderation(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        self.db_path = "database.sqlite"
+        self.init_db()
+
+    def init_db(self):
+        """Initializes the moderation cases table in database.sqlite if it doesn't exist."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS mod_cases (
+                case_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id INTEGER,
+                user_id INTEGER,
+                mod_id INTEGER,
+                action_type TEXT,
+                reason TEXT,
+                duration TEXT,
+                timestamp INTEGER
+            )
+        """)
+        conn.commit()
+        conn.close()
+
+    def log_case(self, guild_id, user_id, mod_id, action_type, reason, duration=None):
+        """Helper function to insert a history record into the database."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        timestamp = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
+        cursor.execute("""
+            INSERT INTO mod_cases (guild_id, user_id, mod_id, action_type, reason, duration, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (guild_id, user_id, mod_id, action_type, reason, duration, timestamp))
+        conn.commit()
+        conn.close()
 
     def parse_duration(self, duration_text):
         match = re.fullmatch(r"(\d+)([mhd]?)", duration_text.strip().lower())
@@ -47,7 +81,7 @@ class Moderation(commands.Cog):
         for name, value, inline in fields:
             embed.add_field(name=name, value=value, inline=inline)
         embed.set_footer(text=f"Command used in #{ctx.channel.name}")
-        embed.timestamp = datetime.datetime.utcnow()
+        embed.timestamp = datetime.datetime.now(datetime.timezone.utc)
 
         try:
             await log_channel.send(embed=embed)
@@ -59,6 +93,54 @@ class Moderation(commands.Cog):
     @commands.Cog.listener()
     async def on_ready(self):
         print("Moderation module loaded successfully.")
+
+    # --- LOGS / HISTORY COMMAND ---
+    @commands.command(name="logs", aliases=["history", "cases"], help="Shows moderation history for a specific user.")
+    @commands.guild_only()
+    @commands.has_permissions(manage_messages=True)
+    async def logs(self, ctx, target: discord.User | discord.Member):
+        try: await ctx.message.delete()
+        except discord.HTTPException: pass
+
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT case_id, mod_id, action_type, reason, duration, timestamp 
+            FROM mod_cases 
+            WHERE guild_id = ? AND user_id = ? 
+            ORDER BY case_id DESC
+        """, (ctx.guild.id, target.id))
+        rows = cursor.fetchall()
+        conn.close()
+
+        embed = discord.Embed(
+            title=f"Mod Logs for {target.name}",
+            color=getattr(Config, "EMBED_COLOR", discord.Color.blue())
+        )
+        embed.set_thumbnail(url=target.display_avatar.url)
+
+        if not rows:
+            embed.description = f"✨ {target.mention} has a completely clean record."
+            return await ctx.send(embed=embed)
+
+        embed.description = f"Found **{len(rows)}** total infraction record(s) for {target.mention}:\n\n"
+        
+        for case_id, mod_id, action_type, reason, duration, timestamp in rows:
+            duration_str = f" ({duration})" if duration else ""
+            case_details = (
+                f"**Case #{case_id} — {action_type.upper()}{duration_str}**\n"
+                f"**Moderator:** <@{mod_id}>\n"
+                f"**Reason:** {reason}\n"
+                f"**Date:** <t:{timestamp}:F> (<t:{timestamp}:R>)\n"
+                f"{"—" * 20}"
+            )
+            # Avoid breaking embed limits (max 4096 characters in descriptions)
+            if len(embed.description) + len(case_details) > 4000:
+                embed.description += "*...and older records truncated due to character limits.*"
+                break
+            embed.description += case_details + "\n"
+
+        await ctx.send(embed=embed)
 
     # --- PURGE COMMAND ---
     @commands.command(name="purge", aliases=["clear"], help="Purges a set number of messages from the channel, optionally filtered by user.")
@@ -166,7 +248,7 @@ class Moderation(commands.Cog):
         dm_embed = discord.Embed(
             title=f"👟 You have been kicked from {ctx.guild.name}",
             color=0xe67e22,
-            timestamp=datetime.datetime.utcnow()
+            timestamp=datetime.datetime.now(datetime.timezone.utc)
         )
         dm_embed.add_field(name="Reason", value=reason, inline=False)
         try:
@@ -175,12 +257,13 @@ class Moderation(commands.Cog):
             pass
 
         await member.kick(reason=reason)
+        self.log_case(ctx.guild.id, member.id, ctx.author.id, "kick", reason)
 
         embed = discord.Embed(title="Member Kicked", color=Config.EMBED_COLOR)
         embed.add_field(name="User", value=f"{member.mention} ({member.id})", inline=False)
         embed.add_field(name="Moderator", value=ctx.author.mention, inline=True)
         embed.add_field(name="Reason", value=reason, inline=True)
-        embed.timestamp = datetime.datetime.utcnow()
+        embed.timestamp = datetime.datetime.now(datetime.timezone.utc)
 
         await ctx.send(embed=embed)
         
@@ -213,7 +296,7 @@ class Moderation(commands.Cog):
         dm_embed = discord.Embed(
             title=f"🔨 You have been permanently banned from {ctx.guild.name}",
             color=0xe74c3c,
-            timestamp=datetime.datetime.utcnow()
+            timestamp=datetime.datetime.now(datetime.timezone.utc)
         )
         dm_embed.add_field(name="Reason", value=reason, inline=False)
         try:
@@ -221,13 +304,14 @@ class Moderation(commands.Cog):
         except discord.Forbidden:
             pass
 
-        await member.ban(reason=reason)
+        await member.ban(reason=reason, delete_message_seconds=0)
+        self.log_case(ctx.guild.id, member.id, ctx.author.id, "ban", reason)
 
         embed = discord.Embed(title="Member Banned", color=Config.EMBED_COLOR)
         embed.add_field(name="User", value=f"{member.mention} ({member.id})", inline=False)
         embed.add_field(name="Moderator", value=ctx.author.mention, inline=True)
         embed.add_field(name="Reason", value=reason, inline=True)
-        embed.timestamp = datetime.datetime.utcnow()
+        embed.timestamp = datetime.datetime.now(datetime.timezone.utc)
 
         await ctx.send(embed=embed)
         await self.send_mod_log(
@@ -254,11 +338,12 @@ class Moderation(commands.Cog):
 
             if user_spec == str(user) or user_spec == str(user.id):
                 await ctx.guild.unban(user)
+                self.log_case(ctx.guild.id, user.id, ctx.author.id, "unban", "No reason provided")
 
                 embed = discord.Embed(title="User Unbanned", color=Config.EMBED_COLOR)
                 embed.add_field(name="User", value=f"{user.name} ({user.id})", inline=False)
                 embed.add_field(name="Moderator", value=ctx.author.mention, inline=False)
-                embed.timestamp = datetime.datetime.utcnow()
+                embed.timestamp = datetime.datetime.now(datetime.timezone.utc)
 
                 await ctx.send(embed=embed)
                 await self.send_mod_log(
@@ -319,7 +404,7 @@ class Moderation(commands.Cog):
         dm_embed = discord.Embed(
             title=f"🔇 You have been muted in {ctx.guild.name}",
             color=0xf39c12,
-            timestamp=datetime.datetime.utcnow()
+            timestamp=datetime.datetime.now(datetime.timezone.utc)
         )
         dm_embed.add_field(name="Duration", value=f"{duration} ({minutes} minutes)", inline=True)
         dm_embed.add_field(name="Reason", value=reason, inline=True)
@@ -330,13 +415,14 @@ class Moderation(commands.Cog):
 
         duration_delta = datetime.timedelta(minutes=minutes)
         await member.timeout(duration_delta, reason=reason)
+        self.log_case(ctx.guild.id, member.id, ctx.author.id, "mute", reason, duration=f"{minutes}m")
 
         embed = discord.Embed(title="Member Muted", color=Config.EMBED_COLOR)
         embed.add_field(name="User", value=f"{member.mention} ({member.id})", inline=False)
         embed.add_field(name="Duration", value=f"{minutes} minutes", inline=True)
         embed.add_field(name="Moderator", value=ctx.author.mention, inline=True)
         embed.add_field(name="Reason", value=reason, inline=False)
-        embed.timestamp = datetime.datetime.utcnow()
+        embed.timestamp = datetime.datetime.now(datetime.timezone.utc)
 
         await ctx.send(embed=embed)
         await self.send_mod_log(
@@ -376,7 +462,7 @@ class Moderation(commands.Cog):
         dm_embed = discord.Embed(
             title=f"🔊 Your mute has been removed in {ctx.guild.name}",
             color=0x2ecc71,
-            timestamp=datetime.datetime.utcnow()
+            timestamp=datetime.datetime.now(datetime.timezone.utc)
         )
         dm_embed.add_field(name="Reason", value=reason, inline=False)
         try:
@@ -385,12 +471,13 @@ class Moderation(commands.Cog):
             pass
 
         await member.timeout(None, reason=reason)
+        self.log_case(ctx.guild.id, member.id, ctx.author.id, "unmute", reason)
 
         embed = discord.Embed(title="Member Unmuted", color=Config.EMBED_COLOR)
         embed.add_field(name="User", value=f"{member.mention} ({member.id})", inline=False)
         embed.add_field(name="Moderator", value=ctx.author.mention, inline=True)
         embed.add_field(name="Reason", value=reason, inline=True)
-        embed.timestamp = datetime.datetime.utcnow()
+        embed.timestamp = datetime.datetime.now(datetime.timezone.utc)
 
         await ctx.send(embed=embed)
         await self.send_mod_log(
@@ -440,6 +527,7 @@ class Moderation(commands.Cog):
             await ctx.send(embed=embed, delete_after=5)
 
     # --- ERROR HANDLING ---
+    @logs.error
     @purge.error
     @kick.error
     @ban.error
