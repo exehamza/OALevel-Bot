@@ -1,9 +1,19 @@
+# Virtual Environments
 .venv/
 venv/
 ENV/
 
+# Python Cache
 __pycache__/
 *.pyc
 
+# Secrets and Local Configurations
 .env
 config.local.json
+
+# Databases
+database.sqlite
+
+# Local Data and JSON Files
+data/blocked_words.json
+data/keywords.json
