@@ -105,10 +105,10 @@ class AutoMod(commands.Cog):
             if user_id not in self.infractions:
                 self.infractions[user_id] = []
 
-            # 1. Clear out violation records older than 2 minutes (rolling window)
+            # 1. Clear out violation records older than 60 minutes (rolling window)
             self.infractions[user_id] = [
                 timestamp for timestamp in self.infractions[user_id]
-                if now - timestamp < datetime.timedelta(minutes=2)
+                if now - timestamp < datetime.timedelta(minutes=60)
             ]
 
             # 2. Add current violation timestamp

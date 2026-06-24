@@ -157,6 +157,7 @@ class Moderation(commands.Cog):
         elif isinstance(arg1, int):
             amount = arg1
 
+        # Validation checks
         if amount <= 0:
             embed = discord.Embed(
                 description="<a:Cross:1514986232294281426> **Invalid format or amount.** Use one of the following:\n"
@@ -166,7 +167,7 @@ class Moderation(commands.Cog):
             )
             try: await ctx.message.delete()
             except discord.HTTPException: pass
-            return await ctx.send(embed=embed)
+            return await ctx.send(embed=embed, delete_after=5)
 
         if amount > 100:
             embed = discord.Embed(
@@ -175,42 +176,47 @@ class Moderation(commands.Cog):
             )
             try: await ctx.message.delete()
             except discord.HTTPException: pass
-            return await ctx.send(embed=embed)
+            return await ctx.send(embed=embed, delete_after=5)
 
-        deleted_count = 0
-
-        def check_filter(message):
-            nonlocal deleted_count
-            if deleted_count >= amount:
-                return False
-            if message.author == target_member:
-                deleted_count += 1
-                return True
-            return False
+        # Delete the command invoking message first
+        try: 
+            await ctx.message.delete()
+        except discord.HTTPException: 
+            pass
 
         try:
+            # If targeting a member, we look deeper into history to find their messages
+            search_limit = 1000 if target_member else amount
+            
+            # Modern discord.py v2 way to flatten history instantly into memory
+            messages = [msg async for msg in ctx.channel.history(limit=search_limit)]
+            
+            # Filter down to what we actually need to delete
             if target_member:
-                try: await ctx.message.delete()
-                except discord.HTTPException: pass
-                deleted = await ctx.channel.purge(limit=500, check=check_filter, bulk=True)
-                actual_deleted = len(deleted)
+                to_delete = [msg for msg in messages if msg.author == target_member][:amount]
             else:
-                deleted = await ctx.channel.purge(limit=amount + 1)
-                actual_deleted = max(0, len(deleted) - 1)
+                to_delete = messages[:amount]
+
+            actual_deleted = len(to_delete)
+
+            # Bulk delete the list in one single API drop
+            if actual_deleted > 0:
+                await ctx.channel.delete_messages(to_delete)
 
         except discord.Forbidden:
             embed = discord.Embed(
-                description="<a:Cross:1514986232294281426> **I need Manage Messages and Read Message History permissions in this channel.**",
+                description="<a:Cross:1514986232294281426> **I need Manage Messages and Read Message History permissions.**",
                 color=discord.Color.red()
             )
             return await ctx.send(embed=embed)
-        except discord.HTTPException:
+        except discord.HTTPException as e:
             embed = discord.Embed(
-                description="<a:Cross:1514986232294281426> **Discord refused the purge.** This can happen with messages older than 14 days.",
+                description=f"<a:Cross:1514986232294281426> **Discord refused the purge.**\n*Error: {e.text}*",
                 color=discord.Color.red()
             )
-            return await ctx.send(embed=embed)
+            return await ctx.send(embed=embed, delete_after=5)
 
+        # Logging and Response Output
         embed_color = getattr(Config, "EMBED_COLOR", discord.Color.blue())
         user_str = f" sent by {target_member.mention}" if target_member else ""
         
@@ -218,7 +224,7 @@ class Moderation(commands.Cog):
             description=f"Successfully deleted **{actual_deleted}** messages{user_str}.",
             color=embed_color
         )
-        await ctx.send(embed=embed)
+        await ctx.send(embed=embed, delete_after=5)
 
         log_fields = [
             ("Channel", ctx.channel.mention, True),
@@ -490,6 +496,60 @@ class Moderation(commands.Cog):
                 ("Reason", reason, True),
             ],
         )
+        
+    # --- WARN COMMAND ---
+    @commands.command(name="warn", help="Warns a member and logs the infraction.")
+    @commands.has_permissions(manage_messages=True)
+    async def warn(self, ctx, member: discord.Member, *, reason: str = "No reason provided"):
+        try: await ctx.message.delete()
+        except discord.HTTPException: pass
+
+        if member.top_role >= ctx.author.top_role and ctx.author != ctx.guild.owner:
+            embed = discord.Embed(
+                description="<a:Cross:1514986232294281426> **You cannot warn someone with an equal or higher administrative role than yourself.**",
+                color=discord.Color.red()
+            )
+            return await ctx.send(embed=embed)
+
+        if member.bot:
+            embed = discord.Embed(
+                description="<a:Cross:1514986232294281426> **You cannot warn a bot.**",
+                color=discord.Color.red()
+            )
+            return await ctx.send(embed=embed)
+
+        dm_embed = discord.Embed(
+            title=f"⚠️ You have been warned in {ctx.guild.name}",
+            color=0xf39c12, # A nice warning orange/yellow
+            timestamp=datetime.datetime.now(datetime.timezone.utc)
+        )
+        dm_embed.add_field(name="Reason", value=reason, inline=False)
+        try:
+            await member.send(embed=dm_embed)
+        except discord.Forbidden:
+            pass
+
+        # Database insertion using your existing internal method structure
+        self.log_case(ctx.guild.id, member.id, ctx.author.id, "warn", reason)
+
+        # Response embed sent back to the channel matching your tick/cross style
+        embed = discord.Embed(
+            description=f"<:Tick:1514986183489360087> **{member.mention}** has been warned.",
+            color=Config.EMBED_COLOR
+        )
+        await ctx.send(embed=embed)
+
+        # Logging sent to your moderation channel layout
+        await self.send_mod_log(
+            ctx,
+            "Member Warned",
+            0xf39c12,
+            [
+                ("User", f"{member.mention} ({member.id})", False),
+                ("Moderator", ctx.author.mention, True),
+                ("Reason", reason, True),
+            ],
+        )    
 
     # --- SAY / BROADCAST COMMAND ---
     @commands.command(name="say", help="Makes the bot say a message. Staff only.")
