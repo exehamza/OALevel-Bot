@@ -17,3 +17,4 @@ database.sqlite
 # Local Data and JSON Files
 data/blocked_words.json
 data/keywords.json
+data/bugs.json
