@@ -14,7 +14,7 @@ class ConfessionModal(discord.ui.Modal, title="Submit a Confession"):
         label="Your Confession",
         style=discord.TextStyle.long,
         placeholder="Type your deepest secret here... (It is completely anonymous)",
-        max_length=1000,
+        max_length=4000,
         required=True
     )
 

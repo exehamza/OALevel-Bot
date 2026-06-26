@@ -36,9 +36,12 @@ class Leveling(commands.Cog):
         result = cursor.fetchone()
         
         if result is None:
+            # Check if the brand new user is a booster, give them 22 exp (15 * 1.5) instead of 15 if true
+            initial_exp = 19 if message.author.premium_since is not None else 15
+            
             cursor.execute(
-                "INSERT INTO levels (user_id, guild_id, exp, level, last_lvl) VALUES(?, ?, 0, 0, 0)",
-                (message.author.id, message.guild.id)
+                "INSERT INTO levels (user_id, guild_id, exp, level, last_lvl) VALUES(?, ?, ?, 0, 0)",
+                (message.author.id, message.guild.id, initial_exp)
             )
             database.commit()
         else:
@@ -46,7 +49,13 @@ class Leveling(commands.Cog):
             lvl = result[3]
             last_lvl = result[4]
             
+            # Base XP
             exp_gained = 15
+            
+            # Check if the member is actively boosting the server
+            if message.author.premium_since is not None:
+                exp_gained = int(exp_gained * 1.25) # 15 * 1.25
+                
             exp += exp_gained
             lvl = 0.1 * (math.sqrt(exp))
             current_lvl_int = int(lvl)
