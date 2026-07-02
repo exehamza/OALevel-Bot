@@ -8,7 +8,8 @@ class RepCog(commands.Cog):
         self.bot = bot
         self.db_path = "database.sqlite"
         self.init_db()
-        # In-memory cooldown tracking: {(author_id, replied_user_id): expiry_datetime}
+        self.tick = "<:Tick:1514986183489360087>"
+        self.cross = "<a:Cross:1514986232294281426>"
         self.cooldowns = {}
 
     def init_db(self):
@@ -37,32 +38,51 @@ class RepCog(commands.Cog):
             cursor.execute("SELECT rep_count FROM user_rep WHERE user_id = ?", (user_id,))
             return cursor.fetchone()[0]
 
-    @commands.command(name="rep", aliases=["replb", "repleaderboard", "lbrep"])
+    @commands.command(name="rep")
+    async def rep_check(self, ctx, member: discord.Member = None):
+        """Checks your own reputation or another member's reputation."""
+        target_member = member or ctx.author
+        
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT rep_count FROM user_rep WHERE user_id = ?", (target_member.id,))
+            result = cursor.fetchone()
+            
+        rep_count = result[0] if result else 0
+
+        embed = discord.Embed(
+            title="✨ Reputation Check",
+            description=f"{target_member.mention} has **{rep_count}** reputation points.",
+            color=0x3498db
+        )
+        await ctx.send(embed=embed)
+
+    @commands.command(name="replb", aliases=["repleaderboard", "lbrep"])
     async def rep_leaderboard(self, ctx):
         """Displays the top 10 members with the most reputation."""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            # Fetch the top 10 users ordered by highest reputation
             cursor.execute("SELECT user_id, rep_count FROM user_rep ORDER BY rep_count DESC LIMIT 10")
             top_users = cursor.fetchall()
 
         if not top_users:
-            await ctx.send("The reputation leaderboard is currently empty! Start helping others to earn rep.")
+            embed = discord.Embed(
+                description=f"{self.cross} The reputation leaderboard is currently empty! Start helping others to earn rep.",
+                color=0xe74c3c
+            )
+            await ctx.send(embed=embed)
             return
 
         leaderboard_text = ""
-        # Medal emojis for the top 3 spots, default circle for the rest
         medals = {1: "🥇", 2: "🥈", 3: "🥉"}
 
         for index, (user_id, rep_count) in enumerate(top_users, start=1):
             emoji = medals.get(index, "🔹")
             
-            # Look up the user object so we can show their name/mention
             member = ctx.guild.get_member(user_id)
             if member:
                 user_string = member.mention
             else:
-                # Fallback to plain text ID if the member left the server
                 user_string = f"User ID: {user_id}"
 
             leaderboard_text += f"{emoji} **#{index}** | {user_string} — **{rep_count}** Rep\n"
@@ -76,6 +96,55 @@ class RepCog(commands.Cog):
         
         await ctx.send(embed=embed)
 
+    @commands.command(name="setrep")
+    @commands.has_permissions(administrator=True)
+    async def set_rep(self, ctx, member: discord.Member, amount: int):
+        """Sets a specific member's reputation amount (Admin only)."""
+        if amount < 0:
+            embed = discord.Embed(
+                description=f"{self.cross} Reputation cannot be a negative number.",
+                color=0xe74c3c
+            )
+            await ctx.send(embed=embed)
+            return
+
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT 1 FROM user_rep WHERE user_id = ?", (member.id,))
+            exists = cursor.fetchone()
+            
+            if exists:
+                cursor.execute("UPDATE user_rep SET rep_count = ? WHERE user_id = ?", (amount, member.id))
+            else:
+                cursor.execute("INSERT INTO user_rep (user_id, rep_count) VALUES (?, ?)", (member.id, amount))
+            conn.commit()
+
+        # FIXED: Using self.tick correctly here
+        embed = discord.Embed(
+            description=f"{self.tick} Successfully set {member.mention}'s reputation to **{amount}**.",
+            color=0x2ecc71
+        )
+        await ctx.send(embed=embed)
+
+    @set_rep.error
+    async def set_rep_error(self, ctx, error):
+        color_err = 0xe74c3c
+        
+        # Local fallback string just in case self.cross fails
+        cross_icon = getattr(self, "cross", "❌")
+        
+        if isinstance(error, commands.MissingPermissions):
+            msg = f"{cross_icon} You do not have permission to use this command."
+        elif isinstance(error, commands.MissingRequiredArgument):
+            msg = f"{cross_icon} **Missing Arguments!**\nUsage: `$setrep @user [amount]`"
+        elif isinstance(error, commands.BadArgument):
+            msg = f"{cross_icon} **Invalid Argument!**\nMake sure you mention a valid user and provide a whole number for the amount."
+        else:
+            msg = f"{cross_icon} An error occurred: `{str(error)}`"
+            
+        embed = discord.Embed(description=msg, color=color_err)
+        await ctx.send(embed=embed)
+        
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         # Ignore bots and messages that aren't replies
