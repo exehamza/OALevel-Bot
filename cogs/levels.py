@@ -37,7 +37,7 @@ class Leveling(commands.Cog):
         
         if result is None:
             # Check if the brand new user is a booster, give them 22 exp (15 * 1.5) instead of 15 if true
-            initial_exp = 19 if message.author.premium_since is not None else 15
+            initial_exp = (15*1.25) if message.author.premium_since is not None else 10
             
             cursor.execute(
                 "INSERT INTO levels (user_id, guild_id, exp, level, last_lvl) VALUES(?, ?, ?, 0, 0)",
@@ -50,7 +50,7 @@ class Leveling(commands.Cog):
             last_lvl = result[4]
             
             # Base XP
-            exp_gained = 15
+            exp_gained = 10
             
             # Check if the member is actively boosting the server
             if message.author.premium_since is not None:

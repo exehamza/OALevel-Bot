@@ -93,6 +93,59 @@ class Moderation(commands.Cog):
     @commands.Cog.listener()
     async def on_ready(self):
         print("Moderation module loaded successfully.")
+        
+    @commands.command(name="removecase", aliases=["delcase", "deletecase"])
+    @commands.has_permissions(administrator=True) # Or manage_messages, depending on your setup
+    async def remove_case(self, ctx, case_id: int):
+        """Removes a moderation case from the logs using its Case ID."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        # Fetch case data before deleting so we can use it in the log embed
+        cursor.execute("""
+            SELECT user_id, mod_id, action_type, reason 
+            FROM mod_cases 
+            WHERE case_id = ? AND guild_id = ?
+        """, (case_id, ctx.guild.id))
+        case_data = cursor.fetchone()
+
+        if not case_data:
+            conn.close()
+            embed = discord.Embed(
+                description=f"<a:Cross:1514986232294281426> Case ID `#{case_id}` was not found for this server.",
+                color=discord.Color.red()
+            )
+            await ctx.send(embed=embed, delete_after=5)
+            return
+
+        user_id, target_mod_id, action_type, original_reason = case_data
+
+        # Delete the record
+        cursor.execute("DELETE FROM mod_cases WHERE case_id = ? AND guild_id = ?", (case_id, ctx.guild.id))
+        conn.commit()
+        conn.close()
+
+        # Send confirmation to the context channel
+        embed = discord.Embed(
+            description=f"<:Tick:1514986183489360087> Successfully deleted Case ID `#{case_id}`.",
+            color=discord.Color.green()
+        )
+        await ctx.send(embed=embed)
+
+        # Format and send the mod log
+        fields = [
+            ("Target User", f"<@{user_id}> (ID: {user_id})", False),
+            ("Removed By", f"{ctx.author.mention} (ID: {ctx.author.id})", False),
+            ("Original Action", action_type.capitalize(), True),
+            ("Original Reason", original_reason or "No reason provided", False)
+        ]
+
+        await self.send_mod_log(
+            ctx=ctx,
+            title=f"🗑️ Moderation Case #{case_id} Removed",
+            color=discord.Color.red(),
+            fields=fields
+        )
 
     # --- LOGS / HISTORY COMMAND ---
     @commands.command(name="logs", aliases=["history", "cases"], help="Shows moderation history for a specific user.")
@@ -332,43 +385,67 @@ class Moderation(commands.Cog):
         )
 
     # --- UNBAN COMMAND ---
-    @commands.command(name="unban", help="Unbans a user using their username#discriminator or ID.")
+    @commands.command(name="unban", help="Unbans a user using their username, tag, or User ID.")
     @commands.has_permissions(ban_members=True)
     @commands.bot_has_permissions(ban_members=True)
-    async def unban(self, ctx, *, user_spec: str):
+    async def unban(self, ctx, *, user_spec: str = None):
         try: await ctx.message.delete()
         except discord.HTTPException: pass
 
-        async for ban_entry in ctx.guild.bans(limit=1000):
-            user = ban_entry.user
+        # Missing parameter check
+        if user_spec is None:
+            embed = discord.Embed(
+                description="<a:Cross:1514986232294281426> **Please specify a user to unban.**\n\n**Usage:** `unban <username/ID>`",
+                color=discord.Color.red()
+            )
+            return await ctx.send(embed=embed)
 
-            if user_spec == str(user) or user_spec == str(user.id):
-                await ctx.guild.unban(user)
-                self.log_case(ctx.guild.id, user.id, ctx.author.id, "unban", "No reason provided")
+        target_user = None
 
-                embed = discord.Embed(title="User Unbanned", color=Config.EMBED_COLOR)
-                embed.add_field(name="User", value=f"{user.name} ({user.id})", inline=False)
-                embed.add_field(name="Moderator", value=ctx.author.mention, inline=False)
-                embed.timestamp = datetime.datetime.now(datetime.timezone.utc)
+        # 1. Try to fetch directly by ID if user_spec is numeric
+        if user_spec.isdigit():
+            try:
+                ban_entry = await ctx.guild.fetch_ban(discord.Object(id=int(user_spec)))
+                target_user = ban_entry.user
+            except discord.NotFound:
+                pass # Not in ban list or invalid ID
 
-                await ctx.send(embed=embed)
-                await self.send_mod_log(
-                    ctx,
-                    "User Unbanned",
-                    0x2ecc71,
-                    [
-                        ("User", f"{user.name} ({user.id})", False),
-                        ("Moderator", ctx.author.mention, True),
-                        ("Reason", "No reason provided", True),
-                    ],
-                )
-                return
+        # 2. If not found by ID, fall back to searching ban list by username / tag
+        if not target_user:
+            async for ban_entry in ctx.guild.bans(limit=None): # limit=None checks ALL bans
+                u = ban_entry.user
+                if user_spec.lower() in (str(u).lower(), u.name.lower(), f"{u.name}#{u.discriminator}".lower()):
+                    target_user = u
+                    break
 
-        embed = discord.Embed(
-            description=f"<a:Cross:1514986232294281426> **Could not find a banned user matching** `{user_spec}`.",
-            color=discord.Color.red()
-        )
+        # 3. If still not found, throw error
+        if not target_user:
+            embed = discord.Embed(
+                description=f"<a:Cross:1514986232294281426> **Could not find a banned user matching** `{user_spec}`.",
+                color=discord.Color.red()
+            )
+            return await ctx.send(embed=embed)
+
+        # Unban and log
+        await ctx.guild.unban(target_user)
+        self.log_case(ctx.guild.id, target_user.id, ctx.author.id, "unban", "No reason provided")
+
+        embed = discord.Embed(title="User Unbanned", color=Config.EMBED_COLOR)
+        embed.add_field(name="User", value=f"{target_user.name} ({target_user.id})", inline=False)
+        embed.add_field(name="Moderator", value=ctx.author.mention, inline=False)
+        embed.timestamp = datetime.datetime.now(datetime.timezone.utc)
+
         await ctx.send(embed=embed)
+        await self.send_mod_log(
+            ctx,
+            "User Unbanned",
+            0x2ecc71,
+            [
+                ("User", f"{target_user.name} ({target_user.id})", False),
+                ("Moderator", ctx.author.mention, True),
+                ("Reason", "No reason provided", True),
+            ],
+        )
 
     # --- MUTE / TIMEOUT COMMAND ---
     @commands.command(name="mute", aliases=["timeout"], help="Mutes a member using Discord's native timeout.")
@@ -500,9 +577,17 @@ class Moderation(commands.Cog):
     # --- WARN COMMAND ---
     @commands.command(name="warn", help="Warns a member and logs the infraction.")
     @commands.has_permissions(manage_messages=True)
-    async def warn(self, ctx, member: discord.Member, *, reason: str = "No reason provided"):
+    async def warn(self, ctx, member: discord.Member = None, *, reason: str = "No reason provided"):
         try: await ctx.message.delete()
         except discord.HTTPException: pass
+
+        # Missing parameter check
+        if member is None:
+            embed = discord.Embed(
+                description="<a:Cross:1514986232294281426> **Please specify a member to warn.**\n\n**Usage:** `warn <@member/ID> [reason]`",
+                color=discord.Color.red()
+            )
+            return await ctx.send(embed=embed)
 
         if member.top_role >= ctx.author.top_role and ctx.author != ctx.guild.owner:
             embed = discord.Embed(

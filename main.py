@@ -38,14 +38,24 @@ class ConfessionBot(commands.Bot):
 
         print("Initializing extension loaders...")
         for filename in os.listdir("./cogs"):
-            # Ignore hidden files, cache folders, or non-python files
-            if filename.endswith(".py") and not filename.startswith("_"):
+            path = os.path.join("./cogs", filename)
+            
+            # Case A: It's an individual python file cog
+            if os.path.isfile(path) and filename.endswith(".py") and not filename.startswith("_"):
                 cog_module = f"cogs.{filename[:-3]}"
-                try:
-                    await self.load_extension(cog_module)
-                    print(f"Loaded extension: {filename[:-3]}")
-                except Exception as e:
-                    print(f"Failed to load extension {filename[:-3]}! Error: {e}")
+                
+            # Case B: It's a folder package cog (like cogs/economy/) containing an __init__.py
+            elif os.path.isdir(path) and os.path.exists(os.path.join(path, "__init__.py")):
+                cog_module = f"cogs.{filename}"
+                
+            else:
+                continue # Skip things like data/ cache, hidden system files, etc.
+
+            try:
+                await self.load_extension(cog_module)
+                print(f"Loaded extension: {cog_module}")
+            except Exception as e:
+                print(f"Failed to load extension {cog_module}! Error: {e}")
         print("--------------------------------------------------")
 
 # 2. Instantiate the Bot instance

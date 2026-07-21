@@ -1,181 +1,529 @@
 import discord
 from discord.ext import commands
-from config import Config
 
-class HelpCommand(commands.Cog):
+# Define permission hierarchy levels
+PERM_MEMBER = 0
+PERM_MOD = 1
+PERM_ADMIN = 2
+
+# Central Data Repository
+# Format for each command:
+# "command_name": {
+#     "category": "Category Name",
+#     "level": PERM_LEVEL,
+#     "aliases": ["alias1", "alias2"],
+#     "usage": "<required_arg> [optional_arg]",
+#     "desc": "Short, active-voice ASD-STE100 description."
+# }
+COMMAND_DATA = {
+    # --- AUTOMESSAGE ---
+    "automessagesetup": {
+        "category": "Auto Message",
+        "level": PERM_MOD,
+        "aliases": ["amsetup"],
+        "usage": "<time_interval> <session>",
+        "desc": "Sets automatic messages for a channel."
+    },
+    "automessagestop": {
+        "category": "Auto Message",
+        "level": PERM_MOD,
+        "aliases": ["amstop"],
+        "usage": "",
+        "desc": "Stops automatic messages for a channel."
+    },
+
+    # --- AUTOMOD ---
+    "automod": {
+        "category": "Auto Mod",
+        "level": PERM_ADMIN,
+        "aliases": [],
+        "usage": "",
+        "desc": "Shows auto moderation settings."
+    },
+    "automod add": {
+        "category": "Auto Mod",
+        "level": PERM_ADMIN,
+        "aliases": [],
+        "usage": "<word>",
+        "desc": "Adds a word to the bad words list."
+    },
+    "automod remove": {
+        "category": "Auto Mod",
+        "level": PERM_ADMIN,
+        "aliases": ["delete"],
+        "usage": "<word>",
+        "desc": "Removes a word from the bad words list."
+    },
+    "automod view": {
+        "category": "Auto Mod",
+        "level": PERM_ADMIN,
+        "aliases": ["list"],
+        "usage": "",
+        "desc": "Shows all blocked words."
+    },
+    "automod whitelist": {
+        "category": "Auto Mod",
+        "level": PERM_ADMIN,
+        "aliases": [],
+        "usage": "<@member>",
+        "desc": "Allows a user to bypass auto moderation."
+    },
+
+    # --- AVATAR ---
+    "avatar": {
+        "category": "Avatar",
+        "level": PERM_MEMBER,
+        "aliases": ["av", "pfp"],
+        "usage": "[@member]",
+        "desc": "Shows the profile picture of a user."
+    },
+
+    # --- COLOR ROLE ---
+    "colour": {
+        "category": "Color Role",
+        "level": PERM_MEMBER,
+        "aliases": ["color"],
+        "usage": "",
+        "desc": "Opens the color selection menu."
+    },
+
+    # --- ECONOMY: GENERAL ---
+    "balance": {
+        "category": "Economy",
+        "level": PERM_MEMBER,
+        "aliases": ["bal"],
+        "usage": "[@member]",
+        "desc": "Shows the current node balance of a member."
+    },
+    "daily": {
+        "category": "Economy",
+        "level": PERM_MEMBER,
+        "aliases": [],
+        "usage": "",
+        "desc": "Claims daily node reward."
+    },
+    "monthly": {
+        "category": "Economy",
+        "level": PERM_MEMBER,
+        "aliases": [],
+        "usage": "",
+        "desc": "Claims monthly node reward."
+    },
+    "richest": {
+        "category": "Economy",
+        "level": PERM_MEMBER,
+        "aliases": [],
+        "usage": "",
+        "desc": "Shows top members by node balance."
+    },
+    "transactions": {
+        "category": "Economy",
+        "level": PERM_MEMBER,
+        "aliases": ["tx"],
+        "usage": "",
+        "desc": "Shows personal node transaction history."
+    },
+    "give": {
+        "category": "Economy",
+        "level": PERM_MEMBER,
+        "aliases": ["transfer", "send"],
+        "usage": "<@member> <amount>",
+        "desc": "Transfers nodes to another member."
+    },
+
+    # --- ECONOMY: ADMIN ---
+    "addnodes": {
+        "category": "Economy Management",
+        "level": PERM_ADMIN,
+        "aliases": [],
+        "usage": "<@member> <amount>",
+        "desc": "Adds nodes to a member account."
+    },
+    "removenodes": {
+        "category": "Economy Management",
+        "level": PERM_ADMIN,
+        "aliases": [],
+        "usage": "<@member> <amount>",
+        "desc": "Removes nodes from a member account."
+    },
+    "setnodes": {
+        "category": "Economy Management",
+        "level": PERM_ADMIN,
+        "aliases": [],
+        "usage": "<@member> <amount>",
+        "desc": "Sets the node balance for a member."
+    },
+    "economyreset": {
+        "category": "Economy Management",
+        "level": PERM_ADMIN,
+        "aliases": [],
+        "usage": "<@member>",
+        "desc": "Resets economy data for a member."
+    },
+    "economylog": {
+        "category": "Economy Management",
+        "level": PERM_ADMIN,
+        "aliases": [],
+        "usage": "[@member|user_id]",
+        "desc": "Shows administrative economy transaction logs."
+    },
+
+    # --- GAMES ---
+    "coinflip": {
+        "category": "Games",
+        "level": PERM_MEMBER,
+        "aliases": ["cf"],
+        "usage": "<bet>",
+        "desc": "Flips a coin to double or lose the bet."
+    },
+    "slots": {
+        "category": "Games",
+        "level": PERM_MEMBER,
+        "aliases": [],
+        "usage": "<bet>",
+        "desc": "Plays the slot machine with a node bet."
+    },
+
+    # --- KEYWORDS ---
+    "keyword": {
+        "category": "Keywords",
+        "level": PERM_ADMIN,
+        "aliases": ["keywords"],
+        "usage": "",
+        "desc": "Shows keyword trigger settings."
+    },
+    "keyword add": {
+        "category": "Keywords",
+        "level": PERM_ADMIN,
+        "aliases": [],
+        "usage": "<trigger> | <response>",
+        "desc": "Adds an automatic keyword response."
+    },
+    "keyword remove": {
+        "category": "Keywords",
+        "level": PERM_ADMIN,
+        "aliases": ["delete"],
+        "usage": "<trigger>",
+        "desc": "Deletes a keyword trigger."
+    },
+    "keyword view": {
+        "category": "Keywords",
+        "level": PERM_ADMIN,
+        "aliases": ["list"],
+        "usage": "",
+        "desc": "Shows all saved keywords."
+    },
+
+    # --- LEVELS ---
+    "level": {
+        "category": "Levels",
+        "level": PERM_MEMBER,
+        "aliases": ["rank"],
+        "usage": "[@member]",
+        "desc": "Shows the current level and rank of a user."
+    },
+    "leaderboard": {
+        "category": "Levels",
+        "level": PERM_MEMBER,
+        "aliases": ["lb"],
+        "usage": "",
+        "desc": "Shows top members by level."
+    },
+    "xp": {
+        "category": "Levels",
+        "level": PERM_ADMIN,
+        "aliases": [],
+        "usage": "",
+        "desc": "Shows XP management commands."
+    },
+    "xp add": {
+        "category": "Levels",
+        "level": PERM_ADMIN,
+        "aliases": [],
+        "usage": "<@member> <amount>",
+        "desc": "Adds XP points to a member."
+    },
+    "xp remove": {
+        "category": "Levels",
+        "level": PERM_ADMIN,
+        "aliases": [],
+        "usage": "<@member> <amount>",
+        "desc": "Removes XP points from a member."
+    },
+
+    # --- LOCKIN ---
+    "lockin": {
+        "category": "Lockin",
+        "level": PERM_MEMBER,
+        "aliases": [],
+        "usage": "<time_input>",
+        "desc": "Locks a channel for a set time."
+    },
+
+    # --- MODERATION ---
+    "removecase": {
+        "category": "Moderation",
+        "level": PERM_ADMIN,
+        "aliases": ["delcase", "deletecase"],
+        "usage": "<case_id>",
+        "desc": "Deletes a moderation case record."
+    },
+    "logs": {
+        "category": "Moderation",
+        "level": PERM_MOD,
+        "aliases": ["history", "cases"],
+        "usage": "<@member|user_id>",
+        "desc": "Shows moderation history for a user."
+    },
+    "purge": {
+        "category": "Moderation",
+        "level": PERM_MOD,
+        "aliases": ["clear"],
+        "usage": "[@member] <amount>",
+        "desc": "Deletes a specified number of messages."
+    },
+    "kick": {
+        "category": "Moderation",
+        "level": PERM_MOD,
+        "aliases": [],
+        "usage": "<@member> [reason]",
+        "desc": "Removes a member from the server."
+    },
+    "ban": {
+        "category": "Moderation",
+        "level": PERM_MOD,
+        "aliases": [],
+        "usage": "<@member> [reason]",
+        "desc": "Bans a member from the server."
+    },
+    "unban": {
+        "category": "Moderation",
+        "level": PERM_MOD,
+        "aliases": [],
+        "usage": "<username|ID>",
+        "desc": "Removes a ban from a user."
+    },
+    "mute": {
+        "category": "Moderation",
+        "level": PERM_MOD,
+        "aliases": ["timeout"],
+        "usage": "<@member> <duration> [reason]",
+        "desc": "Mutes a member for a duration."
+    },
+    "unmute": {
+        "category": "Moderation",
+        "level": PERM_MOD,
+        "aliases": ["untimeout"],
+        "usage": "<@member> [reason]",
+        "desc": "Removes a mute from a member."
+    },
+    "warn": {
+        "category": "Moderation",
+        "level": PERM_MOD,
+        "aliases": [],
+        "usage": "<@member> [reason]",
+        "desc": "Warns a member and records the event."
+    },
+    "say": {
+        "category": "Moderation",
+        "level": PERM_ADMIN,
+        "aliases": [],
+        "usage": "<message>",
+        "desc": "Sends a message through the bot."
+    },
+    "reply": {
+        "category": "Moderation",
+        "level": PERM_ADMIN,
+        "aliases": [],
+        "usage": "<message_id> <message>",
+        "desc": "Replies to a specific message ID."
+    },
+
+    # --- NICKNAME ---
+    "sn": {
+        "category": "Nickname",
+        "level": PERM_MOD,
+        "aliases": [],
+        "usage": "<@member> [nickname]",
+        "desc": "Changes or resets a member nickname."
+    },
+
+    # --- RULES ---
+    "rule": {
+        "category": "Rules",
+        "level": PERM_MEMBER,
+        "aliases": [],
+        "usage": "[number]",
+        "desc": "Displays server rules."
+    },
+
+    # --- SLOWMODE ---
+    "slowmode": {
+        "category": "Slowmode",
+        "level": PERM_MOD,
+        "aliases": ["sm"],
+        "usage": "[duration]",
+        "desc": "Sets channel message delay time."
+    },
+
+    # --- TRANSLATE ---
+    "tr": {
+        "category": "Translate",
+        "level": PERM_MEMBER,
+        "aliases": [],
+        "usage": "<target_lang> (reply to message)",
+        "desc": "Translates a message to another language."
+    },
+    "langs": {
+        "category": "Translate",
+        "level": PERM_MEMBER,
+        "aliases": [],
+        "usage": "",
+        "desc": "Shows supported translation languages."
+    },
+
+    # --- UTILITY ---
+    "ping": {
+        "category": "Utility",
+        "level": PERM_ADMIN,
+        "aliases": [],
+        "usage": "[host]",
+        "desc": "Checks bot latency or network host."
+    },
+    "steal": {
+        "category": "Utility",
+        "level": PERM_ADMIN,
+        "aliases": [],
+        "usage": "[emoji|sticker_reply]",
+        "desc": "Adds an emoji or sticker to the server."
+    }
+}
+
+
+class HelpCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        self.bot.remove_command("help")  # Unload default help command
 
-    @commands.command(name="help", aliases=["commands", "menu"], help="Displays available commands or specific command guidelines.")
-    async def help(self, ctx, category_or_command: str = None):
-        embed_color = getattr(Config, "EMBED_COLOR", 0x3498db)
-        prefix = getattr(Config, "PREFIX", "$")
-
-        # Define detailed guides for your core moderation/utility commands
-        command_guides = {
-            "purge": {
-                "description": "Purges a set number of messages from the current text channel.",
-                "usage": f"`{prefix}purge <amount>`",
-                "example": f"`{prefix}purge 50`",
-                "notes": "• Maximum amount allowed at once is 100 messages.\n• Messages older than 14 days cannot be bulk purged due to Discord API limits."
-            },
-            "kick": {
-                "description": "Kicks a member from the server and direct messages them the reason.",
-                "usage": f"`{prefix}kick <@member/ID> [reason]`",
-                "example": f"`{prefix}kick @User123 Breaking chat rules`",
-                "notes": "• You cannot kick users with a higher or equal administrative role to yours."
-            },
-            "ban": {
-                "description": "Permanently bans a member from the server and direct messages them the reason.",
-                "usage": f"`{prefix}ban <@member/ID> [reason]`",
-                "example": f"`{prefix}ban @User123 Severe raiding behaviors`",
-                "notes": "• Clears the user's message history and restricts them from re-joining."
-            },
-            "unban": {
-                "description": "Revokes a ban layout for a user using their exact ID or username tag.",
-                "usage": f"`{prefix}unban <username#desc / UserID>`",
-                "example": f"`{prefix}unban 123456789012345678`",
-                "notes": "• Scans the audit ban registry log to locate the matching entity."
-            },
-            "mute": {
-                "description": "Mutes a server member using Discord's native isolated timeout system.",
-                "usage": f"`{prefix}mute <@member/ID> <duration> [reason]`",
-                "example": f"`{prefix}mute @User123 2h Continued disruption`",
-                "notes": "• Durations accept explicit flags: `m` (minutes), `h` (hours), `d` (days).\n• Maximum cap configuration is 28 days (`28d`)."
-            },
-            "unmute": {
-                "description": "Instantly lifts an active timeout restriction from a server member.",
-                "usage": f"`{prefix}unmute <@member/ID> [reason]`",
-                "example": f"`{prefix}unmute @User123 Appeal processed successfully`",
-                "notes": "• Restores immediate chat and voice access privileges."
-            },
-            "say": {
-                "description": "Forces the bot to mirror and broadcast an explicit text string.",
-                "usage": f"`{prefix}say <message>`",
-                "example": f"`{prefix}say Regular server maintenance tonight at 8 PM.`",
-                "notes": "• Deletes the administrator's original call string to keep operations clean."
-            },
-            "reply": {
-                "description": "Forces the bot to execute a target-threaded reply to a specific message ID.",
-                "usage": f"`{prefix}reply <message_id> <message>`",
-                "example": f"`{prefix}reply 1234567890123456 Hello, this is an official staff follow-up.`",
-                "notes": "• The target message must exist inside the same text channel where this command is run."
-            },
-            "snipe": {
-                "description": "Recovers up to the last 5 deleted messages in the current channel.",
-                "usage": f"`{prefix}snipe [index 1-5]`",
-                "example": f"`{prefix}snipe 1`",
-                "notes": "• Defaults to `1` (the most recently deleted message) if an index isn't provided."
-            },
-            "steal": {
-                "description": "Steals a custom emoji or a replied sticker and adds it directly to this server.",
-                "usage": f"`{prefix}steal <emoji> [custom_name]`",
-                "example": f"`{prefix}steal :cool_emoji: global_cool`",
-                "notes": "• You can also use this by replying to a message containing a sticker with just `{prefix}steal`."
-            },
-            "close": {
-                "description": "Safely closes, archives, and locks an active staff modmail thread.",
-                "usage": f"`{prefix}close`",
-                "example": f"`{prefix}close`",
-                "notes": "• Can only be executed inside a valid thread channel under the designated Modmail channel category."
-            }
-        }
-
-        # CASE 1: USER IS ASKING FOR A SPECIFIC COMMAND GUIDE
-        if category_or_command:
-            command_name = category_or_command.strip().lower().replace(prefix, "")
+    def get_user_level(self, ctx: commands.Context) -> int:
+        """Determines the user's permission level based on permissions."""
+        if not ctx.guild:
+            return PERM_MEMBER
+        
+        perms = ctx.author.guild_permissions
+        if perms.administrator:
+            return PERM_ADMIN
+        
+        # Moderator checks
+        if (
+            perms.manage_messages or 
+            perms.kick_members or 
+            perms.ban_members or 
+            perms.moderate_members or 
+            perms.manage_nicknames or 
+            perms.manage_guild
+        ):
+            return PERM_MOD
             
-            guide_embed = discord.Embed(color=embed_color, timestamp=discord.utils.utcnow())
-            guide_embed.set_footer(text=f"Requested by {ctx.author.name}", icon_url=ctx.author.display_avatar.url)
+        return PERM_MEMBER
 
-            # Check if we have an explicit detailed guide written above
-            if command_name in command_guides:
-                guide = command_guides[command_name]
-                guide_embed.title = f"Command Guide: {prefix}{command_name}"
-                guide_embed.description = guide["description"]
-                guide_embed.add_field(name="System Syntax", value=guide["usage"], inline=False)
-                guide_embed.add_field(name="Execution Example", value=guide["example"], inline=False)
-                guide_embed.add_field(name="Operational Notes", value=guide["notes"], inline=False)
-                return await ctx.send(embed=guide_embed)
+    @commands.command(name="help")
+    async def help_command(self, ctx: commands.Context, *, query: str = None):
+        """Displays filtered help commands or details for a specific command."""
+        user_level = self.get_user_level(ctx)
+        prefix = ctx.clean_prefix
+
+        # --- CASE 1: SPECIFIC COMMAND HELP (!help <command>) ---
+        if query:
+            query = query.lower().strip()
             
-            # FALLBACK CASE: The command exists on the bot, but doesn't have an explicit manual entry
-            else:
-                actual_command = self.bot.get_command(command_name)
-                if actual_command:
-                    # Treat cases like $rank where it prints its mapped card assignment
-                    desc = actual_command.help or f"Shows your {command_name} card details or statistical breakdowns."
-                    guide_embed.title = f"Command Information: {prefix}{command_name}"
-                    guide_embed.description = f"The `{prefix}{command_name}` command {desc.lower()}"
-                    guide_embed.add_field(name="system Syntax", value=f"`{prefix}{command_name}`", inline=False)
-                    return await ctx.send(embed=guide_embed)
-                else:
-                    # The command doesn't exist on the bot at all
-                    return await ctx.send(f"Command `{prefix}{command_name}` does not exist.", delete_after=5)
+            target_name = None
+            target_info = None
 
-        # CASE 2: MAIN HELP MENU (Displays if no specific command parameter is passed)
+            for name, data in COMMAND_DATA.items():
+                if query == name or query in data.get("aliases", []):
+                    target_name = name
+                    target_info = data
+                    break
+
+            if not target_info or target_info["level"] > user_level:
+                embed = discord.Embed(
+                    title="Error",
+                    description=f"Command `{query}` was not found or you do not have permission to view it.",
+                    color=discord.Color.red()
+                )
+                await ctx.send(embed=embed)
+                return
+
+            embed = discord.Embed(
+                title=f"Command: {prefix}{target_name}",
+                description=target_info["desc"],
+                color=discord.Color.blue()
+            )
+            
+            embed.add_field(
+                name="Usage", 
+                value=f"`{prefix}{target_name} {target_info['usage']}`".strip(), 
+                inline=False
+            )
+            
+            if target_info.get("aliases"):
+                aliases_str = ", ".join([f"`{a}`" for a in target_info["aliases"]])
+                embed.add_field(name="Aliases", value=aliases_str, inline=False)
+                
+            embed.add_field(name="Category", value=target_info["category"], inline=True)
+            
+            level_labels = {PERM_MEMBER: "Member", PERM_MOD: "Moderator", PERM_ADMIN: "Administrator"}
+            embed.add_field(name="Required Role", value=level_labels.get(target_info["level"], "Member"), inline=True)
+            
+            await ctx.send(embed=embed)
+            return
+
+        # --- CASE 2: MAIN HELP MENU (!help) ---
+        categories = {}
+        for cmd_name, data in COMMAND_DATA.items():
+            if data["level"] <= user_level:
+                cat = data["category"]
+                if cat not in categories:
+                    categories[cat] = []
+                categories[cat].append(cmd_name)
+
         embed = discord.Embed(
-            title="O/A Level Community Assistant | Command Menu",
-            description=(
-                f"Welcome! Use `{prefix}help <command>` to fetch deeper syntax configurations.\n"
-                f"**Current Prefix:** `{prefix}`\n"
-                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            ),
-            color=embed_color
+            title="Help Menu",
+            color=discord.Color.blue()
         )
 
-        # 1. MODERATION
-        embed.add_field(
-            name="Moderation Module",
-            value=(
-                f"`{prefix}purge` ➔ Clean up specific chat histories.\n"
-                f"`{prefix}kick` ➔ Remove a member safely from the guild.\n"
-                f"`{prefix}ban` / `{prefix}unban` ➔ Manage severe access revocations.\n"
-                f"`{prefix}mute` / `{prefix}unmute` ➔ Manage native server timeouts.\n"
-                f"`{prefix}say` / `{prefix}reply` ➔ Broadcast messages or inline responses."
-            ),
-            inline=False
-        )
+        if not categories:
+            embed.description = "No commands available."
+            await ctx.send(embed=embed)
+            return
 
-        # 2. LOGS & UTILITY
-        embed.add_field(
-            name="Logs & Utility Tools",
-            value=(
-                f"`{prefix}snipe <1-5>` ➔ Recover up to the last 5 deleted messages.\n"
-                f"`{prefix}steal` ➔ Extract a custom emoji or a sticker asset into your server."
-            ),
-            inline=False
-        )
+        # Build directory tree format
+        tree_lines = ["Commands/                                                            "]
+        sorted_cats = sorted(categories.keys())
 
-        # 3. MODMAIL & AUTO MOD
-        embed.add_field(
-            name="Modmail & AutoMod Infrastructure",
-            value=(
-                f"`{prefix}close` ➔ Safe termination and archive processing for a staff thread.\n"
-                f"`{prefix}automod` ➔ Comprehensive keyword configuration blueprints.\n"
-                f"`{prefix}keyword` ➔ Dynamic internal system administration guide."
-            ),
-            inline=False
-        )
+        for c_idx, cat in enumerate(sorted_cats):
+            is_last_cat = (c_idx == len(sorted_cats) - 1)
+            cat_prefix = "└── " if is_last_cat else "├── "
+            tree_lines.append(f"{cat_prefix}{cat}/")
 
-        # 4. LEVELING & LOCK-IN
-        embed.add_field(
-            name="Engagement & System Access",
-            value=(
-                f"`{prefix}level` ➔ Review current experience point tierings.\n"
-                f"`{prefix}leaderboard` ➔ Display server engagement positioning charts.\n"
-                f"`{prefix}lockin` ➔ Execute focus constraints."
-            ),
-            inline=False
-        )
+            cmds = sorted(categories[cat])
+            for m_idx, cmd in enumerate(cmds):
+                is_last_cmd = (m_idx == len(cmds) - 1)
+                
+                # Adjust indent spacing depending on whether the category is last
+                child_indent = "    " if is_last_cat else "│   "
+                cmd_prefix = "└── " if is_last_cmd else "├── "
+                
+                tree_lines.append(f"{child_indent}{cmd_prefix}{prefix}{cmd}")
 
-        embed.set_thumbnail(url=self.bot.user.display_avatar.url)
-        embed.set_footer(
-            text=f"Requested by {ctx.author.name} • Total Commands: 16", 
-            icon_url=ctx.author.display_avatar.url
-        )
-        embed.timestamp = discord.utils.utcnow()
-
+        tree_str = "\n".join(tree_lines)
+        
+        embed.description = f"Use `{prefix}help [command]` for command details.\n```\n{tree_str}\n```"
+        embed.set_footer(text=f"Requested by {ctx.author}", icon_url=ctx.author.display_avatar.url)
+        
         await ctx.send(embed=embed)
 
+
 async def setup(bot):
-    await bot.add_cog(HelpCommand(bot))
+    await bot.add_cog(HelpCog(bot))
