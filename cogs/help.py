@@ -167,7 +167,14 @@ COMMAND_DATA = {
         "usage": "[@member|user_id]",
         "desc": "Shows administrative economy transaction logs."
     },
-
+    "economyblacklist add/remove": {
+        "category": "Economy Management",
+        "level": PERM_ADMIN,
+        "aliases": [],
+        "usage": "[@member]",
+        "desc": "Blacklists/Whitelists a member from using economy commands."
+    },
+    
     # --- GAMES ---
     "coinflip": {
         "category": "Games",
@@ -335,8 +342,8 @@ COMMAND_DATA = {
         "category": "Moderation",
         "level": PERM_ADMIN,
         "aliases": [],
-        "usage": "<message_id> <message>",
-        "desc": "Replies to a specific message ID."
+        "usage": "<channel> <message_id> <message>\n!reply <message_id> <message>",
+        "desc": "Replies to a specific message ID and/or from a specific channel."
     },
 
     # --- NICKNAME ---
