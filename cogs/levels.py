@@ -1,5 +1,6 @@
 import io
 import math
+import os
 import sqlite3
 import aiohttp
 from PIL import Image, ImageDraw, ImageFont
@@ -19,6 +20,22 @@ cursor.execute("""CREATE TABLE IF NOT EXISTS levels (
 )""")
 database.commit()
 
+# --- HELPER FUNCTION TO SAFELY LOAD BUNDLED FONTS ---
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+def load_font(filename, size):
+    """Attempts to load a bundled font from the 'fonts' directory, fallback to default."""
+    font_path = os.path.join(BASE_DIR, "fonts", filename)
+    try:
+        return ImageFont.truetype(font_path, size)
+    except IOError:
+        # Fallback to current directory if not in 'fonts/' folder
+        try:
+            return ImageFont.truetype(filename, size)
+        except IOError:
+            return ImageFont.load_default()
+
+
 class Leveling(commands.Cog):
     
     def __init__(self, bot):
@@ -36,7 +53,6 @@ class Leveling(commands.Cog):
         result = cursor.fetchone()
         
         if result is None:
-            # Check if the brand new user is a booster, give them 22 exp (15 * 1.5) instead of 15 if true
             initial_exp = (15*1.25) if message.author.premium_since is not None else 10
             
             cursor.execute(
@@ -49,12 +65,10 @@ class Leveling(commands.Cog):
             lvl = result[3]
             last_lvl = result[4]
             
-            # Base XP
             exp_gained = 10
             
-            # Check if the member is actively boosting the server
             if message.author.premium_since is not None:
-                exp_gained = int(exp_gained * 1.25) # 15 * 1.25
+                exp_gained = int(exp_gained * 1.25)
                 
             exp += exp_gained
             lvl = 0.1 * (math.sqrt(exp))
@@ -79,7 +93,6 @@ class Leveling(commands.Cog):
                 )
                 database.commit()
 
-                # --- AUTOMATIC ROLE ASSIGNMENT AT LEVEL 10 ---
                 if current_lvl_int >= 10:
                     role = message.guild.get_role(Config.IMAGE_PERMS_ROLE_ID)
                     if role and role not in message.author.roles:
@@ -127,7 +140,6 @@ class Leveling(commands.Cog):
             lifetime_exp = user_data[0]
             level = int(user_data[1])
             
-        # math for xp
         xp_floor_current_lvl = int((level / 0.1) ** 2)
         xp_floor_next_lvl = int(((level + 1) / 0.1) ** 2)
         
@@ -151,33 +163,18 @@ class Leveling(commands.Cog):
         draw = ImageDraw.Draw(base_card)
         username = f"@{target.name}"
         
-        try:
-            font_username = ImageFont.truetype("arialbd.ttf", 35)
-            font_metrics = ImageFont.truetype("arial.ttf", 25)
-        except IOError:
-            try:
-                font_username = ImageFont.truetype("DejaVuSans-Bold.ttf", 26)
-                font_metrics = ImageFont.truetype("DejaVuSans.ttf", 20)
-            except IOError:
-                font_username = ImageFont.load_default()
-                font_metrics = ImageFont.load_default()
+        # --- LOAD BUNDLED FONTS ---
+        font_username = load_font("Arial-Bold.ttf", 35)
+        font_metrics = load_font("Arial.ttf", 25)
 
         if len(username) > 15:
-            try:
-                font_username_scaled = ImageFont.truetype("arialbd.ttf", 18)
-            except IOError:
-                try:
-                    font_username_scaled = ImageFont.truetype("DejaVuSans-Bold.ttf", 18)
-                except IOError:
-                    font_username_scaled = ImageFont.load_default()
+            font_username_scaled = load_font("Arial-Bold.ttf", 18)
             draw.text((150, 27), username, fill=(255, 255, 255, 255), font=font_username_scaled)
         else:
             draw.text((150, 27), username, fill=(255, 255, 255, 255), font=font_username)
         
         draw.text((155, 100), f"Level: {level}", fill=(255, 255, 255, 255), font=font_metrics)
-        
         draw.text((270, 100), f"XP: {current_level_xp}/{xp_needed_for_this_tier}", fill=(200, 200, 200, 255), font=font_metrics)
-        
         draw.text((444, 100), f"Rank: #{rank}", fill=(255, 215, 0, 255), font=font_metrics)
 
         bar_x, bar_y = 11, 150      
@@ -251,17 +248,9 @@ class Leveling(commands.Cog):
         X_STATS = 480
         CENTER_Y = row_h // 2
 
-        try:
-            font_rank = ImageFont.truetype("arialbd.ttf", 26)
-            font_name = ImageFont.truetype("arialbd.ttf", 22)
-            font_stats = ImageFont.truetype("arial.ttf", 18)
-        except IOError:
-            try:
-                font_rank = ImageFont.truetype("DejaVuSans-Bold.ttf", 22)
-                font_name = ImageFont.truetype("DejaVuSans-Bold.ttf", 18)
-                font_stats = ImageFont.truetype("DejaVuSans.ttf", 15)
-            except IOError:
-                font_rank = font_name = font_stats = ImageFont.load_default()
+        font_rank = load_font("Arial-Bold.ttf", 26)
+        font_name = load_font("Arial-Bold.ttf", 22)
+        font_stats = load_font("Arial.ttf", 18)
 
         async with aiohttp.ClientSession() as session:
             for index, entry in enumerate(top_entries):
@@ -338,11 +327,9 @@ class Leveling(commands.Cog):
         embed.set_image(url=f"attachment://{filename}")
         await ctx.send(file=discord_file, embed=embed)
 
-    # --- XP MANAGEMENT GROUP COMMANDS WITH EMBEDS ---
     @commands.group(name="xp", invoke_without_command=True, description="Manage user XP settings")
     @commands.has_permissions(administrator=True)
     async def xp(self, ctx):
-        """Root command for managing user XP values."""
         embed = discord.Embed(
             description="<a:Cross:1514986232294281426> Incomplete statement. Use:\n`$xp add @user <amount>`\n`$xp remove @user <amount>`",
             color=discord.Color.red()
@@ -352,7 +339,6 @@ class Leveling(commands.Cog):
     @xp.command(name="add")
     @commands.has_permissions(administrator=True)
     async def xp_add(self, ctx, member: discord.Member, amount: int):
-        """Adds a specific amount of XP to a user."""
         if member.bot:
             embed = discord.Embed(
                 description="<a:Cross:1514986232294281426> You cannot modify XP for bots.",
@@ -396,7 +382,6 @@ class Leveling(commands.Cog):
             )
             return await ctx.send(embed=embed)
         
-        # --- DYNAMIC ROLE CHECK FOR ADMIN ADJUSTMENTS ---
         if int(new_lvl) >= 10:
             role = ctx.guild.get_role(Config.IMAGE_PERMS_ROLE_ID)
             if role and role not in member.roles:
@@ -414,7 +399,6 @@ class Leveling(commands.Cog):
     @xp.command(name="remove")
     @commands.has_permissions(administrator=True)
     async def xp_remove(self, ctx, member: discord.Member, amount: int):
-        """Removes a specific amount of XP from a user."""
         if member.bot:
             embed = discord.Embed(
                 description="<a:Cross:1514986232294281426> Bots do not process tracking structures.",
@@ -458,7 +442,6 @@ class Leveling(commands.Cog):
             )
             return await ctx.send(embed=embed)
         
-        # Strip role if removal drops them below level 10
         if int(new_lvl) < 10:
             role = ctx.guild.get_role(Config.IMAGE_PERMS_ROLE_ID)
             if role and role in member.roles:
@@ -525,6 +508,5 @@ class Leveling(commands.Cog):
             await ctx.send(embed=embed)
 
 
-# --- FIXED: SETUP IS OUTSIDE THE CLASS NOW ---
 async def setup(bot):
     await bot.add_cog(Leveling(bot))
