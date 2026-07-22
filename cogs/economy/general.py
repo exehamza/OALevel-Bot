@@ -4,15 +4,12 @@ from datetime import datetime, timedelta
 from .database import EconomyDB
 import time
 
-# balance
-# daily
-# monthly
-# richest
-# transactions
-
 class EconomyGeneral(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        # Custom Emojis
+        self.TICK = "<:Tick:1514986183489360087>"
+        self.CROSS = "<a:Cross:1514986232294281426>"
 
     @commands.Cog.listener()
     async def on_ready(self):
@@ -22,25 +19,19 @@ class EconomyGeneral(commands.Cog):
     @commands.command(name="balance", aliases=["bal"])
     async def balance(self, ctx, member: discord.Member = None):
         """Checks your current matrix nodes wallet balance."""
-        # If no user is mentioned, default to the person who typed the command
         target = member or ctx.author
         
         try:
-            # 1. Fetch the user profile from the database
             profile = await EconomyDB.get_profile(target.id)
             
-            # 2. Bug Fix: If the user doesn't exist in the database yet, register them on the fly!
             if not profile:
                 await EconomyDB.register_user(target.id)
-                # Re-fetch the newly created profile (default values: nodes=0, bank=0)
                 profile = await EconomyDB.get_profile(target.id)
             
-            # 3. Unpack your nodes/bank values from the normalized DB helper
             wallet_nodes = profile.get("nodes", 0)
             bank_nodes = profile.get("bank_nodes", profile.get("bank", 0))
             total_nodes = wallet_nodes + bank_nodes
 
-            # 4. Construct a beautiful, scannable rich embed to send back
             embed = discord.Embed(
                 title=f"💳 Financial Telemetry: {target.display_name}", 
                 color=discord.Color.blue()
@@ -53,13 +44,17 @@ class EconomyGeneral(commands.Cog):
             
             embed.set_footer(text=f"Requested by {ctx.author.name}", icon_url=ctx.author.display_avatar.url)
             
-            # Send the message back to the channel
             await ctx.send(embed=embed)
             
         except Exception as e:
-            # If something fails under the hood, this will catch it and print it directly to your console!
             print(f"❌ Error inside balance command: {e}")
-            await ctx.send("⚠️ An internal data loop error occurred while compiling your balance sheet.")
+            embed = discord.Embed(
+                title=f"{self.CROSS} Data Loop Error",
+                description="An internal data loop error occurred while compiling your balance sheet.",
+                color=discord.Color.red()
+            )
+            embed.set_footer(text=f"Requested by {ctx.author.name}", icon_url=ctx.author.display_avatar.url)
+            await ctx.send(embed=embed)
 
     @commands.command(name="daily")
     async def daily(self, ctx):
@@ -73,14 +68,27 @@ class EconomyGeneral(commands.Cog):
             time_left = 86400 - (current_time - user_data["last_daily"])
             hours, remainder = divmod(int(time_left), 3600)
             minutes, _ = divmod(remainder, 60)
-            return await ctx.send(f"❌ **Firewall Lockout:** You've already pulled daily nodes. Try again in **{hours}h {minutes}m**.")
+            
+            embed = discord.Embed(
+                title=f"{self.CROSS} Firewall Lockout",
+                description=f"You've already pulled daily nodes. Try again in **{hours}h {minutes}m**.",
+                color=discord.Color.red()
+            )
+            embed.set_footer(text=f"Requested by {ctx.author.name}", icon_url=ctx.author.display_avatar.url)
+            return await ctx.send(embed=embed)
 
         # Update balance and save transaction record
         await EconomyDB.update_balance(ctx.author.id, nodes=reward)
         await EconomyDB.log_transaction(ctx.author.id, "DAILY", reward, "Claimed daily node reward")
         await EconomyDB.update_cooldown(ctx.author.id, "daily")
         
-        await ctx.send(f"🟩 **Data Stream Established!** You allocated `+{reward:,}` Nodes to your system.")
+        embed = discord.Embed(
+            title=f"{self.TICK} Data Stream Established!",
+            description=f"You allocated `+{reward:,}` Nodes to your system.",
+            color=discord.Color.green()
+        )
+        embed.set_footer(text=f"Requested by {ctx.author.name}", icon_url=ctx.author.display_avatar.url)
+        await ctx.send(embed=embed)
 
     @commands.command(name="monthly")
     async def monthly(self, ctx):
@@ -94,14 +102,27 @@ class EconomyGeneral(commands.Cog):
             time_left = 2592000 - (current_time - user_data["last_monthly"])
             days, remainder = divmod(int(time_left), 86400)
             hours, _ = divmod(remainder, 3600)
-            return await ctx.send(f"❌ **Mainframe Cooldown:** Monthly node drop is unavailable. Wait **{days}d {hours}h**.")
+            
+            embed = discord.Embed(
+                title=f"{self.CROSS} Mainframe Cooldown",
+                description=f"Monthly node drop is unavailable. Wait **{days}d {hours}h**.",
+                color=discord.Color.red()
+            )
+            embed.set_footer(text=f"Requested by {ctx.author.name}", icon_url=ctx.author.display_avatar.url)
+            return await ctx.send(embed=embed)
 
         # Update balance and save transaction record
         await EconomyDB.update_balance(ctx.author.id, nodes=reward)
         await EconomyDB.log_transaction(ctx.author.id, "MONTHLY", reward, "Claimed monthly node reward")
         await EconomyDB.update_cooldown(ctx.author.id, "monthly")
         
-        await ctx.send(f"⚡ **Mainframe Sync Complete!** A massive injection of `+{reward:,}` Nodes has been successfully routed to your wallet.")
+        embed = discord.Embed(
+            title=f"{self.TICK} Mainframe Sync Complete!",
+            description=f"A massive injection of `+{reward:,}` Nodes has been successfully routed to your wallet.",
+            color=discord.Color.green()
+        )
+        embed.set_footer(text=f"Requested by {ctx.author.name}", icon_url=ctx.author.display_avatar.url)
+        await ctx.send(embed=embed)
 
     @commands.command(name="richest")
     async def richest(self, ctx):
@@ -114,6 +135,7 @@ class EconomyGeneral(commands.Cog):
                     description="The network ledger is currently empty. Start mining nodes to claim the top spot!",
                     color=discord.Color.gold()
                 )
+                embed.set_footer(text=f"Requested by {ctx.author.name}", icon_url=ctx.author.display_avatar.url)
                 return await ctx.send(embed=embed)
 
             embed = discord.Embed(
@@ -123,10 +145,8 @@ class EconomyGeneral(commands.Cog):
             
             description = ""
             for index, (user_id, total_nodes) in enumerate(leaderboard, start=1):
-                # 1. Check cache first
                 user = self.bot.get_user(user_id)
                 
-                # 2. If not cached, fetch directly from Discord API
                 if user is None:
                     try:
                         user = await self.bot.fetch_user(user_id)
@@ -146,10 +166,11 @@ class EconomyGeneral(commands.Cog):
         except Exception as e:
             print(f"❌ Error inside richest command: {e}")
             embed = discord.Embed(
-                title="⚠️ Data Loop Error",
+                title=f"{self.CROSS} Data Loop Error",
                 description="An internal error occurred while fetching the network leaderboard.",
                 color=discord.Color.dark_red()
             )
+            embed.set_footer(text=f"Requested by {ctx.author.name}", icon_url=ctx.author.display_avatar.url)
             await ctx.send(embed=embed)
 
     @commands.command(name="transactions", aliases=["tx"])
@@ -157,18 +178,22 @@ class EconomyGeneral(commands.Cog):
         """View your recent transaction log history."""
         history = await EconomyDB.get_history(ctx.author.id, 5)
         if not history:
-            return await ctx.send("📄 No transaction data found on your network profile.")
+            embed = discord.Embed(
+                title="📝 Recent Network Log Ledger",
+                description="No transaction data found on your network profile.",
+                color=discord.Color.blue()
+            )
+            embed.set_footer(text=f"Requested by {ctx.author.name}", icon_url=ctx.author.display_avatar.url)
+            return await ctx.send(embed=embed)
 
         embed = discord.Embed(title="📝 Recent Network Log Ledger", color=discord.Color.blue())
         
         for row in history:
-            # Safely read rows from Row object/dictionary format
             action = row["action_type"]
             amount = row["amount"]
             details = row["details"]
             timestamp = row["timestamp"]
             
-            # Format float or legacy SQLite text timestamps into clean readable UTC
             clean_time = EconomyDB.format_timestamp(timestamp)
             sign = "+" if amount >= 0 else ""
             
@@ -178,6 +203,7 @@ class EconomyGeneral(commands.Cog):
                 inline=False
             )
             
+        embed.set_footer(text=f"Requested by {ctx.author.name}", icon_url=ctx.author.display_avatar.url)
         await ctx.send(embed=embed)
     
     @commands.command(name="give", aliases=["transfer", "send"])
@@ -186,19 +212,21 @@ class EconomyGeneral(commands.Cog):
         # 1. Prevent transferring to yourself
         if recipient.id == ctx.author.id:
             embed = discord.Embed(
-                title="❌ Transfer Failed",
+                title=f"{self.CROSS} Transfer Failed",
                 description="You cannot transfer nodes to yourself.",
                 color=discord.Color.red()
             )
+            embed.set_footer(text=f"Requested by {ctx.author.name}", icon_url=ctx.author.display_avatar.url)
             return await ctx.send(embed=embed)
 
         # 2. Prevent transferring negative or zero amounts
         if amount <= 0:
             embed = discord.Embed(
-                title="❌ Invalid Amount",
+                title=f"{self.CROSS} Invalid Amount",
                 description="Please specify a valid amount of nodes greater than `0`.",
                 color=discord.Color.red()
             )
+            embed.set_footer(text=f"Requested by {ctx.author.name}", icon_url=ctx.author.display_avatar.url)
             return await ctx.send(embed=embed)
 
         try:
@@ -212,11 +240,11 @@ class EconomyGeneral(commands.Cog):
             sender_wallet = sender_profile.get("nodes", 0)
             if sender_wallet < amount:
                 embed = discord.Embed(
-                    title="⚠️ Insufficient Funds",
-                    description=f"You only have `{sender_wallet:,}` Nodes available in your liquid wallet.",
+                    title=f"{self.CROSS} Insufficient Funds",
+                    description=f"You only have `{sender_wallet:,}` Nodes available in your liquid wallet.\n**Required:** `{amount:,}` Nodes",
                     color=discord.Color.gold()
                 )
-                embed.set_footer(text=f"Required: {amount:,} Nodes", icon_url=ctx.author.display_avatar.url)
+                embed.set_footer(text=f"Requested by {ctx.author.name}", icon_url=ctx.author.display_avatar.url)
                 return await ctx.send(embed=embed)
 
             # 5. Ensure recipient profile exists
@@ -238,7 +266,7 @@ class EconomyGeneral(commands.Cog):
 
             # 8. Send confirmation embed
             embed = discord.Embed(
-                title="💸 Network Transfer Complete",
+                title=f"{self.TICK} Network Transfer Complete",
                 description=f"Successfully allocated `{amount:,}` Nodes from your wallet to {recipient.mention}.",
                 color=discord.Color.green()
             )
@@ -246,15 +274,16 @@ class EconomyGeneral(commands.Cog):
             embed.add_field(name="📤 Sender", value=ctx.author.mention, inline=True)
             embed.add_field(name="📥 Recipient", value=recipient.mention, inline=True)
             embed.add_field(name="🪙 Amount", value=f"`{amount:,}` Nodes", inline=False)
-            embed.set_footer(text=f"Authorized by {ctx.author.name}", icon_url=ctx.author.display_avatar.url)
+            embed.set_footer(text=f"Requested by {ctx.author.name}", icon_url=ctx.author.display_avatar.url)
 
             await ctx.send(embed=embed)
 
         except Exception as e:
             print(f"❌ Error inside pay command: {e}")
             embed = discord.Embed(
-                title="⚠️ Data Loop Error",
+                title=f"{self.CROSS} Data Loop Error",
                 description="An internal error occurred while processing the transaction.",
                 color=discord.Color.dark_red()
             )
+            embed.set_footer(text=f"Requested by {ctx.author.name}", icon_url=ctx.author.display_avatar.url)
             await ctx.send(embed=embed)

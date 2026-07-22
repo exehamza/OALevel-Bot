@@ -671,6 +671,33 @@ class Moderation(commands.Cog):
             )
             await ctx.send(embed=embed, delete_after=5)
 
+    # --- CROSS-CHANNEL REPLY COMMAND ---
+    @commands.command(name="reply", help="Makes the bot reply to a message in any channel without exposing staff.")
+    @commands.has_permissions(administrator=True)
+    async def reply(self, ctx, channel: discord.TextChannel, message_id: int, *, message: str):
+        # Delete staff command instantly so no one sees who ran it
+        try:
+            await ctx.message.delete()
+        except (discord.Forbidden, discord.NotFound):
+            pass
+
+        try:
+            target_message = await channel.fetch_message(message_id)
+            await target_message.reply(message)
+        except discord.NotFound:
+            embed = discord.Embed(
+                description="<a:Cross:1514986232294281426> **Error: Message not found in specified channel.**",
+                color=discord.Color.red()
+            )
+            # Sends error in current channel silently to staff
+            await ctx.send(embed=embed, delete_after=5)
+        except discord.HTTPException:
+            embed = discord.Embed(
+                description="<a:Cross:1514986232294281426> **Failed to send reply due to an API error.**",
+                color=discord.Color.red()
+            )
+            await ctx.send(embed=embed, delete_after=5)
+
     # --- ERROR HANDLING ---
     @logs.error
     @purge.error
