@@ -2,11 +2,21 @@ import discord
 from discord.ext import commands
 import sqlite3
 from datetime import datetime, timedelta
+import os
 
 class RepCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.db_path = "database.sqlite"
+        
+        # 1. Get project root directory (cogs/rep.py -> cogs -> Root)
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        
+        # 2. Path to database inside 'data' directory
+        self.db_path = os.path.join(project_root, "data", "database.sqlite")
+        
+        # 3. Ensure 'data/' directory exists
+        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        
         self.init_db()
         self.tick = "<:Tick:1514986183489360087>"
         self.cross = "<a:Cross:1514986232294281426>"

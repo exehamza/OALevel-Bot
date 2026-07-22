@@ -7,7 +7,9 @@ from discord.ext import commands
 from config import Config
 
 # Path to save your auto-responder keywords
-KEYWORDS_FILE = "./data/keywords.json"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+KEYWORDS_FILE = os.path.join(BASE_DIR, "data", "keywords.json")
 
 # Custom Emojis
 TICK = "<:Tick:1514986183489360087>"

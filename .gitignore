@@ -1,20 +1,16 @@
-# Virtual Environments
-.venv/
-venv/
-ENV/
-
-# Python Cache
+# Python virtual environment & cache
 __pycache__/
-*.pyc
-
-# Secrets and Local Configurations
+*.py[cod]
 .env
-config.local.json
+venv/
+.venv/
 
-# Databases
-database.sqlite
+# Dynamic state data & databases
+data/
+*.db
+*.sqlite
+*.sqlite3
 
-# Local Data and JSON Files
-data/blocked_words.json
-data/keywords.json
-data/bugs.json
+# Temporary exports
+blocked_words_export.txt
+export_*.txt

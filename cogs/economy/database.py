@@ -6,10 +6,16 @@ from typing import Any, Optional
 
 import aiosqlite
 
+# Adjust parents index so PROJECT_ROOT points to your top-level bot directory:
+# Use .parents[1] if this script is in `cogs/`
+PROJECT_ROOT = Path(__file__).resolve().parents[1] 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DB_PATH = os.environ.get("ECONOMY_DB_PATH", str(PROJECT_ROOT / "economy.db"))
-LEGACY_DATA_DB_PATH = PROJECT_ROOT / "data" / "economy.db"
+# Point the default database directly into the persistent `data/` directory
+DATA_DIR = PROJECT_ROOT / "data"
+DEFAULT_DB_PATH = DATA_DIR / "economy.db"
+
+DB_PATH = os.environ.get("ECONOMY_DB_PATH", str(DEFAULT_DB_PATH))
+LEGACY_DATA_DB_PATH = DEFAULT_DB_PATH
 
 
 class EconomyDB:

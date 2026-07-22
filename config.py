@@ -5,11 +5,11 @@ from dotenv import load_dotenv
 load_dotenv()
 
 class Config:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     TOKEN = os.getenv("DISCORD_TOKEN")
-    DATABASE_URL = os.getenv("DB_NAME", "database.db")
     PREFIX = "!"
     EMBED_COLOR = 0x3498db
-    BLOCKED_WORDS_FILE = os.path.join("data", "blocked_words.json")
+    BLOCKED_WORDS_FILE = os.path.join(BASE_DIR, "data", "blocked_words.json")
     
     LOG_CHANNEL_ID = 1512792484764454946
     WELCOME_CHANNEL_ID = 1512790530403340540

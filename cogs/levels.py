@@ -8,7 +8,17 @@ import discord
 from discord.ext import commands
 from config import Config
 
-database = sqlite3.connect("database.sqlite")
+# Get project root folder (where main.py / config.py lives)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__)) # Adjust with another dirname() if this file is in cogs/
+
+# Define database path inside the 'data' folder
+DB_PATH = os.path.join(BASE_DIR, "data", "database.sqlite")
+
+# Ensure the 'data' directory exists before connecting
+os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+
+# Connect to the SQLite database
+database = sqlite3.connect(DB_PATH)
 cursor = database.cursor()
 
 cursor.execute("""CREATE TABLE IF NOT EXISTS levels (
@@ -23,13 +33,17 @@ database.commit()
 # --- HELPER FUNCTION TO SAFELY LOAD BUNDLED FONTS ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
+# Go up one level from 'cogs' to reach the main project root
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 def load_font(filename, size):
-    """Attempts to load a bundled font from the 'fonts' directory, fallback to default."""
+    """Attempts to load a bundled font from the 'fonts' directory."""
     font_path = os.path.join(BASE_DIR, "fonts", filename)
-    try:
+    
+    if os.path.exists(font_path):
         return ImageFont.truetype(font_path, size)
-    except IOError:
-        # Fallback to current directory if not in 'fonts/' folder
+    else:
+        print(f"[Font Warning] Could not find '{filename}' at path: {font_path}")
         try:
             return ImageFont.truetype(filename, size)
         except IOError:
@@ -164,11 +178,11 @@ class Leveling(commands.Cog):
         username = f"@{target.name}"
         
         # --- LOAD BUNDLED FONTS ---
-        font_username = load_font("Arial-Bold.ttf", 35)
-        font_metrics = load_font("Arial.ttf", 25)
+        font_username = load_font("Arial-Bold.TTF", 35)
+        font_metrics = load_font("Arial.TTF", 25)
 
         if len(username) > 15:
-            font_username_scaled = load_font("Arial-Bold.ttf", 18)
+            font_username_scaled = load_font("Arial-Bold.TTF", 100)
             draw.text((150, 27), username, fill=(255, 255, 255, 255), font=font_username_scaled)
         else:
             draw.text((150, 27), username, fill=(255, 255, 255, 255), font=font_username)
@@ -248,9 +262,9 @@ class Leveling(commands.Cog):
         X_STATS = 480
         CENTER_Y = row_h // 2
 
-        font_rank = load_font("Arial-Bold.ttf", 26)
-        font_name = load_font("Arial-Bold.ttf", 22)
-        font_stats = load_font("Arial.ttf", 18)
+        font_rank = load_font("Arial-Bold.TTF", 26)
+        font_name = load_font("Arial-Bold.TTF", 22)
+        font_stats = load_font("Arial.TTF", 18)
 
         async with aiohttp.ClientSession() as session:
             for index, entry in enumerate(top_entries):

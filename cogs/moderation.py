@@ -4,11 +4,21 @@ import sqlite3
 import discord
 from discord.ext import commands
 from config import Config
+import os
 
 class Moderation(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.db_path = "database.sqlite"
+        
+        # 1. Get project root (cogs/moderation.py -> cogs -> Project Root)
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        
+        # 2. Point directly to the database inside the 'data' folder
+        self.db_path = os.path.join(project_root, "data", "database.sqlite")
+        
+        # 3. Ensure the data directory exists before connecting
+        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        
         self.init_db()
 
     def init_db(self):

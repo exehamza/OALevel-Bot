@@ -1,7 +1,7 @@
 import json
 import os
 import re
-import datetime
+from datetime import datetime, timedelta, timezone
 import discord
 from discord.ext import commands
 from config import Config
@@ -13,7 +13,7 @@ class AutoMod(commands.Cog):
         self.blocked_words = set()
         self.whitelisted_users = set()  # Tracks user IDs exempt from AutoMod
         
-        # New dictionary to track violation timestamps: {user_id: [datetime, datetime...]}
+        # Tracks violation timestamps: {user_id: [datetime, datetime...]}
         self.infractions = {} 
         
         self.load_automod_data()
@@ -21,8 +21,11 @@ class AutoMod(commands.Cog):
     def load_automod_data(self):
         """Loads blocked words and whitelisted users from the configuration file."""
         os.makedirs(os.path.dirname(Config.BLOCKED_WORDS_FILE), exist_ok=True)
-
+        
+        # Check if the file exists; if not, initialize default empty structure
         if not os.path.exists(Config.BLOCKED_WORDS_FILE):
+            self.blocked_words = set()
+            self.whitelisted_users = set()
             self.save_automod_data()
             return
 
@@ -50,6 +53,7 @@ class AutoMod(commands.Cog):
         self.whitelisted_users = {
             int(user_id)
             for user_id in whitelist
+            if str(user_id).isdigit()
         }
 
     def save_automod_data(self):
@@ -64,10 +68,10 @@ class AutoMod(commands.Cog):
                 file,
                 indent=2,
                 ensure_ascii=False,
-                )
+            )
             file.write("\n")
 
-    def contains_swear_word(self, content):
+    def contains_swear_word(self, content: str) -> bool:
         """Checks if a string contains any of the exact blacklisted phrases."""
         for word in self.blocked_words:
             pattern = rf"(?<!\w){re.escape(word)}(?!\w)"
@@ -99,7 +103,7 @@ class AutoMod(commands.Cog):
                 return
 
             # --- VIOLATION TRACKING LOGIC ---
-            now = datetime.datetime.utcnow()
+            now = datetime.now(timezone.utc)
             user_id = message.author.id
 
             if user_id not in self.infractions:
@@ -108,7 +112,7 @@ class AutoMod(commands.Cog):
             # 1. Clear out violation records older than 60 minutes (rolling window)
             self.infractions[user_id] = [
                 timestamp for timestamp in self.infractions[user_id]
-                if now - timestamp < datetime.timedelta(minutes=60)
+                if now - timestamp < timedelta(minutes=60)
             ]
 
             # 2. Add current violation timestamp
@@ -121,7 +125,7 @@ class AutoMod(commands.Cog):
                 
                 try:
                     # Apply a 30-minute native Discord timeout
-                    await message.author.timeout(datetime.timedelta(minutes=30), reason="AutoMod: Exceeded word filter limits.")
+                    await message.author.timeout(timedelta(minutes=30), reason="AutoMod: Exceeded word filter limits.")
                     
                     mute_embed = discord.Embed(
                         description=f"🚫 {message.author.mention} **has been muted for 30 minutes for repeating blacklisted language.**",
@@ -129,7 +133,6 @@ class AutoMod(commands.Cog):
                     )
                     return await message.channel.send(embed=mute_embed)
                 except discord.Forbidden:
-                    # In case the bot lacks role hierarchy power over the targeted member
                     pass
 
             # Fallback normal message warning if under 5 violations
@@ -220,14 +223,15 @@ class AutoMod(commands.Cog):
         words_string = ", ".join(f"`{word}`" for word in sorted_words)
 
         if len(words_string) > 1900:
-            with open("blocked_words_export.txt", "w", encoding="utf-8") as f:
+            file_path = os.path.join(os.path.dirname(Config.BLOCKED_WORDS_FILE), "blocked_words_export.txt")
+            with open(file_path, "w", encoding="utf-8") as f:
                 f.write("\n".join(sorted_words))
             
             embed = discord.Embed(
                 description="📁 **The blocked words list is too long to display. Exporting to a file below:**",
                 color=discord.Color.orange()
             )
-            return await ctx.send(embed=embed, file=discord.File("blocked_words_export.txt"))
+            return await ctx.send(embed=embed, file=discord.File(file_path))
 
         embed = discord.Embed(
             title="🚫 Current AutoMod Blocked Words",
