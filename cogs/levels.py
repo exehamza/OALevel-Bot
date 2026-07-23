@@ -8,10 +8,10 @@ import discord
 from discord.ext import commands
 from config import Config
 
-# Get project root folder (where main.py / config.py lives)
-BASE_DIR = os.path.dirname(os.path.abspath(__file__)) # Adjust with another dirname() if this file is in cogs/
+# Step out from cogs/ into the main Discord Bot directory
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# Define database path inside the 'data' folder
+# Define database path inside the root 'data' folder
 DB_PATH = os.path.join(BASE_DIR, "data", "database.sqlite")
 
 # Ensure the 'data' directory exists before connecting

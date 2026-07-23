@@ -6,12 +6,18 @@ from typing import Any, Optional
 
 import aiosqlite
 
-# Adjust parents index so PROJECT_ROOT points to your top-level bot directory:
-# Use .parents[1] if this script is in `cogs/`
-PROJECT_ROOT = Path(__file__).resolve().parents[1] 
+# Path(__file__).resolve() = .../Discord Bot/cogs/economy/database.py
+# .parents[0] -> .../Discord Bot/cogs/economy/
+# .parents[1] -> .../Discord Bot/cogs/
+# .parents[2] -> .../Discord Bot/  (Your root folder!)
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 # Point the default database directly into the persistent `data/` directory
 DATA_DIR = PROJECT_ROOT / "data"
+
+# Ensure the 'data' directory exists
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+
 DEFAULT_DB_PATH = DATA_DIR / "economy.db"
 
 DB_PATH = os.environ.get("ECONOMY_DB_PATH", str(DEFAULT_DB_PATH))

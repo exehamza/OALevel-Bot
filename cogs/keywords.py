@@ -7,7 +7,8 @@ from discord.ext import commands
 from config import Config
 
 # Path to save your auto-responder keywords
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# Navigates up from cogs/ to the main Discord Bot directory
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 KEYWORDS_FILE = os.path.join(BASE_DIR, "data", "keywords.json")
 
