@@ -160,44 +160,31 @@ class EconomyAdmin(commands.Cog):
         """Parent command for managing economy blacklists."""
         embed = discord.Embed(
             title=f"{self.CROSS} Invalid Subcommand",
-            description="Please specify a valid subcommand action:\n• `$economyblacklist add @member`\n• `$economyblacklist remove @member`",
+            description=(
+                "Please specify a valid subcommand action:\n"
+                "• `$economyblacklist add @member`\n"
+                "• `$economyblacklist remove @member`"
+            ),
             color=discord.Color.red()
         )
         embed.set_footer(text=f"Requested by {ctx.author.name}", icon_url=ctx.author.display_avatar.url)
         await ctx.send(embed=embed)
 
+
     @economy_blacklist.command(name="add")
     @commands.has_permissions(administrator=True)
     async def blacklist_add(self, ctx, member: discord.Member):
         """Add a member to the economy blacklist."""
-        async with aiosqlite.connect(DB_PATH) as db:
-            # Table initialization guard
-            await db.execute("""
-                CREATE TABLE IF NOT EXISTS economy_blacklist (
-                    user_id INTEGER PRIMARY KEY,
-                    blacklisted_by INTEGER,
-                    timestamp REAL
-                )
-            """)
-            
-            async with db.execute("SELECT user_id FROM economy_blacklist WHERE user_id = ?", (member.id,)) as cursor:
-                existing = await cursor.fetchone()
+        added = await EconomyDB.add_blacklist(member.id, ctx.author.id)
 
-            if existing:
-                embed = discord.Embed(
-                    title=f"{self.CROSS} Already Blacklisted",
-                    description=f"{member.mention} is already blacklisted from the network economy.",
-                    color=discord.Color.gold()
-                )
-                embed.set_footer(text=f"Requested by {ctx.author.name}", icon_url=ctx.author.display_avatar.url)
-                return await ctx.send(embed=embed)
-
-            import time
-            await db.execute(
-                "INSERT INTO economy_blacklist (user_id, blacklisted_by, timestamp) VALUES (?, ?, ?)",
-                (member.id, ctx.author.id, time.time())
+        if not added:
+            embed = discord.Embed(
+                title=f"{self.CROSS} Already Blacklisted",
+                description=f"{member.mention} is already blacklisted from the network economy.",
+                color=discord.Color.gold()
             )
-            await db.commit()
+            embed.set_footer(text=f"Requested by {ctx.author.name}", icon_url=ctx.author.display_avatar.url)
+            return await ctx.send(embed=embed)
 
         embed = discord.Embed(
             title=f"{self.TICK} Blacklist Applied",
@@ -207,38 +194,66 @@ class EconomyAdmin(commands.Cog):
         embed.set_footer(text=f"Requested by {ctx.author.name}", icon_url=ctx.author.display_avatar.url)
         await ctx.send(embed=embed)
 
+
     @economy_blacklist.command(name="remove")
     @commands.has_permissions(administrator=True)
     async def blacklist_remove(self, ctx, member: discord.Member):
         """Remove a member from the economy blacklist."""
-        async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute("""
-                CREATE TABLE IF NOT EXISTS economy_blacklist (
-                    user_id INTEGER PRIMARY KEY,
-                    blacklisted_by INTEGER,
-                    timestamp REAL
-                )
-            """)
-            
-            async with db.execute("SELECT user_id FROM economy_blacklist WHERE user_id = ?", (member.id,)) as cursor:
-                existing = await cursor.fetchone()
+        removed = await EconomyDB.remove_blacklist(member.id)
 
-            if not existing:
-                embed = discord.Embed(
-                    title=f"{self.CROSS} Not Blacklisted",
-                    description=f"{member.mention} is not currently blacklisted.",
-                    color=discord.Color.gold()
-                )
-                embed.set_footer(text=f"Requested by {ctx.author.name}", icon_url=ctx.author.display_avatar.url)
-                return await ctx.send(embed=embed)
-
-            await db.execute("DELETE FROM economy_blacklist WHERE user_id = ?", (member.id,))
-            await db.commit()
+        if not removed:
+            embed = discord.Embed(
+                title=f"{self.CROSS} Not Blacklisted",
+                description=f"{member.mention} is not currently blacklisted.",
+                color=discord.Color.gold()
+            )
+            embed.set_footer(text=f"Requested by {ctx.author.name}", icon_url=ctx.author.display_avatar.url)
+            return await ctx.send(embed=embed)
 
         embed = discord.Embed(
             title=f"{self.TICK} Blacklist Revoked",
             description=f"Successfully restored economy access for {member.mention}.",
             color=discord.Color.green()
+        )
+        embed.set_footer(text=f"Requested by {ctx.author.name}", icon_url=ctx.author.display_avatar.url)
+        await ctx.send(embed=embed)
+        
+    @economy_blacklist.command(name="view", aliases=["list", "show"])
+    @commands.has_permissions(administrator=True)
+    async def blacklist_view(self, ctx):
+        """List all members currently blacklisted from the economy."""
+        blacklisted = await EconomyDB.get_all_blacklisted()
+
+        if not blacklisted:
+            embed = discord.Embed(
+                title="🛡️ Economy Blacklist",
+                description="There are currently no blacklisted users.",
+                color=discord.Color.blue()
+            )
+            embed.set_footer(text=f"Requested by {ctx.author.name}", icon_url=ctx.author.display_avatar.url)
+            return await ctx.send(embed=embed)
+
+        entries = []
+        for entry in blacklisted:
+            user_id = entry["user_id"]
+            admin_id = entry["blacklisted_by"]
+            ts = int(entry["timestamp"]) if entry["timestamp"] else None
+            
+            time_str = f"<t:{ts}:R>" if ts else "Unknown"
+            entries.append(
+                f"• **User:** <@{user_id}> (`{user_id}`)\n"
+                f"  └ **By:** <@{admin_id}> | **When:** {time_str}"
+            )
+
+        # Simple page/list view (truncates safely if list is long)
+        description = "\n\n".join(entries[:15])
+        if len(entries) > 15:
+            description += f"\n\n*...and {len(entries) - 15} more.*"
+
+        embed = discord.Embed(
+            title=f"🚫 Blacklisted Users ({len(blacklisted)})",
+            description=description,
+            color=discord.Color.dark_red()
         )
         embed.set_footer(text=f"Requested by {ctx.author.name}", icon_url=ctx.author.display_avatar.url)
         await ctx.send(embed=embed)

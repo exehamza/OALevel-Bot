@@ -2,6 +2,8 @@ from .database import EconomyDB
 from .general import EconomyGeneral
 from .admin import EconomyAdmin
 from .games import EconomyGames
+from .shop import EconomyShop
+from .crimes import EconomyCrimes
 
 async def setup(bot):
     # 1. Fire up your database engine and establish tables first!
@@ -15,3 +17,5 @@ async def setup(bot):
     await bot.add_cog(EconomyGeneral(bot))
     await bot.add_cog(EconomyAdmin(bot))
     await bot.add_cog(EconomyGames(bot))
+    await bot.add_cog(EconomyShop(bot))
+    await bot.add_cog(EconomyCrimes(bot))

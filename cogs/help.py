@@ -130,6 +130,69 @@ COMMAND_DATA = {
         "usage": "<@member> <amount>",
         "desc": "Transfers nodes to another member."
     },
+    "rob": {
+            "category": "Economy",
+            "level": PERM_MEMBER,
+            "aliases": [],
+            "usage": "<@member>",
+            "desc": "Steals nodes from another member with a chance of failure."
+        },
+    "hack": {
+            "category": "Economy",
+            "level": PERM_MEMBER,
+            "aliases": [],
+            "usage": "<@member>",
+            "desc": "Attempts to hack another member's account for nodes with a chance of failure."
+        },
+    "dep": {
+            "category": "Economy",
+            "level": PERM_MEMBER,
+            "aliases": ["deposit"],
+            "usage": "<@member> <amount>",
+            "desc": "Deposits nodes into another member's account."
+        },
+    "withdraw": {
+            "category": "Economy",
+            "level": PERM_MEMBER,
+            "aliases": ["with"],
+            "usage": "<amount>",
+            "desc": "Withdraws nodes from account."
+        },
+    "shop": {
+            "category": "Economy",
+            "level": PERM_MEMBER,
+            "aliases": [],
+            "usage": "",
+            "desc": "Views the economy shop."
+        },
+    "buy": {
+            "category": "Economy",
+            "level": PERM_MEMBER,
+            "aliases": [],
+            "usage": "<item>",
+            "desc": "Buys an item from the economy shop."
+        },
+    "open": {
+            "category": "Economy",
+            "level": PERM_MEMBER,
+            "aliases": [],
+            "usage": "<crate_name>",
+            "desc": "Opens a crate and rewards the user."
+        },
+    "view": {
+            "category": "Economy",
+            "level": PERM_MEMBER,
+            "aliases": [],
+            "usage": "<crate_name>",
+            "desc": "Views the contents of a crate."
+        },
+    "inv": {
+            "category": "Economy",
+            "level": PERM_MEMBER,
+            "aliases": ["inventory"],
+            "usage": "",
+            "desc": "Views the user's inventory."
+        },
 
     # --- ECONOMY: ADMIN ---
     "addnodes": {
@@ -174,6 +237,7 @@ COMMAND_DATA = {
         "usage": "[@member]",
         "desc": "Blacklists/Whitelists a member from using economy commands."
     },
+    
     
     # --- GAMES ---
     "coinflip": {

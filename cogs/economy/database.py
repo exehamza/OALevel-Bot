@@ -37,6 +37,7 @@ class EconomyDB:
             await EconomyDB._ensure_passive_tables(db)
             await EconomyDB._ensure_inventory_tables(db)
             await EconomyDB._maybe_migrate_legacy_data_db(db)
+            await EconomyDB._ensure_blacklist_table(db)
             await db.commit()
 
     @staticmethod
@@ -582,3 +583,61 @@ class EconomyDB:
                 LIMIT ?
             """, (limit,)) as cursor:
                 return await cursor.fetchall()
+            
+    @staticmethod
+    async def _ensure_blacklist_table(db: aiosqlite.Connection):
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS economy_blacklist (
+                user_id INTEGER PRIMARY KEY,
+                blacklisted_by INTEGER,
+                timestamp REAL
+            )
+        """)
+
+    @staticmethod
+    async def is_blacklisted(user_id: int) -> bool:
+        """Check if a user is currently blacklisted from the economy."""
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute(
+                "SELECT 1 FROM economy_blacklist WHERE user_id = ?", (user_id,)
+            ) as cursor:
+                return await cursor.fetchone() is not None
+
+    @staticmethod
+    async def add_blacklist(user_id: int, admin_id: int) -> bool:
+        """Add a user to the blacklist. Returns False if already blacklisted."""
+        async with aiosqlite.connect(DB_PATH) as db:
+            await EconomyDB._ensure_blacklist_table(db)
+            if await EconomyDB.is_blacklisted(user_id):
+                return False
+            
+            await db.execute(
+                "INSERT INTO economy_blacklist (user_id, blacklisted_by, timestamp) VALUES (?, ?, ?)",
+                (user_id, admin_id, time.time())
+            )
+            await db.commit()
+            return True
+
+    @staticmethod
+    async def remove_blacklist(user_id: int) -> bool:
+        """Remove a user from the blacklist. Returns False if user was not blacklisted."""
+        async with aiosqlite.connect(DB_PATH) as db:
+            await EconomyDB._ensure_blacklist_table(db)
+            if not await EconomyDB.is_blacklisted(user_id):
+                return False
+
+            await db.execute("DELETE FROM economy_blacklist WHERE user_id = ?", (user_id,))
+            await db.commit()
+            return True
+
+    @staticmethod
+    async def get_all_blacklisted() -> list[dict[str, Any]]:
+        """Fetch all blacklisted users along with metadata."""
+        async with aiosqlite.connect(DB_PATH) as db:
+            db.row_factory = aiosqlite.Row
+            await EconomyDB._ensure_blacklist_table(db)
+            async with db.execute(
+                "SELECT user_id, blacklisted_by, timestamp FROM economy_blacklist ORDER BY timestamp DESC"
+            ) as cursor:
+                rows = await cursor.fetchall()
+                return [dict(row) for row in rows]
