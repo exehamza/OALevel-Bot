@@ -6,7 +6,7 @@ from typing import Union
 from .database import EconomyDB
 
 # Maximum allowable bet in Nodes
-MAX_BET = 2_000_000
+MAX_BET = 15_000_000
 # Network tax on net profits (10%)
 WINNING_TAX_RATE = 0.10
 
@@ -197,17 +197,19 @@ class EconomyGames(commands.Cog):
         display_grid = f"┃ {reel1} ┃ {reel2} ┃ {reel3} ┃"
 
         if reel1 == reel2 == reel3:
-            raw_payout = bet_amount * 5
-            gross_profit = raw_payout - bet_amount
-            tax_amount = int(gross_profit * WINNING_TAX_RATE)
-            net_profit = gross_profit - tax_amount
-            final_payout = bet_amount + net_profit
+            multiplier = 5.0
+            gross_winnings = int(bet_amount * multiplier)
+            tax_amount = int(gross_winnings * 0.10)
+            net_winnings = gross_winnings - tax_amount
+            
+            # Refund initial bet + pay net winnings
+            total_payout = bet_amount + net_winnings
 
             await EconomyDB.update_balance(
                 ctx.author.id,
-                final_payout,
+                total_payout,
                 "GAMBLE_WIN",
-                f"Slots Triple win: +{net_profit} net nodes (Tax: {tax_amount})",
+                f"Slots Triple win: +{net_winnings} net nodes (Tax: {tax_amount})",
             )
 
             result_embed = discord.Embed(
@@ -215,25 +217,27 @@ class EconomyGames(commands.Cog):
                 description=(
                     f"{display_grid}\n\n"
                     f"Full code match! Multiplier `5x` processed.\n\n"
-                    f"• **Gross Profit:** `+{gross_profit:,}` Nodes\n"
+                    f"• **Gross Winnings:** `+{gross_winnings:,}` Nodes\n"
                     f"• **Network Tax (10%):** `-{tax_amount:,}` Nodes\n"
-                    f"• **Net Payout:** `+{final_payout:,}` Nodes *(Net Profit: +{net_profit:,} Nodes)*"
+                    f"• **Net Profit Added:** `+{net_winnings:,}` Nodes"
                 ),
                 color=discord.Color.green(),
             )
 
         elif reel1 == reel2 or reel2 == reel3 or reel1 == reel3:
-            raw_payout = int(bet_amount * 1.5)
-            gross_profit = raw_payout - bet_amount
-            tax_amount = int(gross_profit * WINNING_TAX_RATE)
-            net_profit = gross_profit - tax_amount
-            final_payout = bet_amount + net_profit
+            multiplier = 1.5
+            gross_winnings = int(bet_amount * multiplier)
+            tax_amount = int(gross_winnings * 0.10)
+            net_winnings = gross_winnings - tax_amount
+            
+            # Refund initial bet + pay net winnings
+            total_payout = bet_amount + net_winnings
 
             await EconomyDB.update_balance(
                 ctx.author.id,
-                final_payout,
+                total_payout,
                 "GAMBLE_WIN",
-                f"Slots Double win: +{net_profit} net nodes (Tax: {tax_amount})",
+                f"Slots Double win: +{net_winnings} net nodes (Tax: {tax_amount})",
             )
 
             result_embed = discord.Embed(
@@ -241,14 +245,15 @@ class EconomyGames(commands.Cog):
                 description=(
                     f"{display_grid}\n\n"
                     f"Partial match! Multiplier `1.5x` processed.\n\n"
-                    f"• **Gross Profit:** `+{gross_profit:,}` Nodes\n"
+                    f"• **Gross Winnings:** `+{gross_winnings:,}` Nodes\n"
                     f"• **Network Tax (10%):** `-{tax_amount:,}` Nodes\n"
-                    f"• **Net Payout:** `+{final_payout:,}` Nodes *(Net Profit: +{net_profit:,} Nodes)*"
+                    f"• **Net Profit Added:** `+{net_winnings:,}` Nodes"
                 ),
                 color=discord.Color.green(),
             )
 
         else:
+            # Loss: Bet was already deducted upfront, just log the transaction
             await EconomyDB.log_transaction(
                 ctx.author.id, "GAMBLE_LOSS", -bet_amount, f"Slots loss: {bet_amount} nodes"
             )
