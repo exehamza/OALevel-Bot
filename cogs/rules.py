@@ -32,7 +32,7 @@ class Rules(commands.Cog):
             },
             7: {
                 "title": "Rule 7. No Inappropriate Behaviour",
-                "desc": "Sexual remarks, explicit jokes, suggestive comments, flirtatious roleplay, inappropriate propositions or other behaviour that creates an uncomfortable environment are strictly prohibited, even if intended as a joke."
+                "desc": "Sexual remarks, explicit jokes, suggestive comments, or flirtatious roleplay are prohibited if they create an uncomfortable environment, even if intended as a joke. However, subjective humor and mutual jesting between consenting individuals are permitted, provided they remain within reasonable parameters and do not cross into non-consensual harassment, explicitly graphic or crude language, or compromise the comfort of the general community."
             },
             8: {
                 "title": "Rule 8. No NSFW or Disturbing Content",
