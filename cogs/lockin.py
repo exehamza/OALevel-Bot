@@ -79,7 +79,7 @@ class LockIn(commands.Cog):
         
         try:
             # We use timed_out_until to apply Discord's built-in timeout feature
-            await ctx.author.timeout(duration, reason="User initiated !lockin study mode.")
+            await ctx.author.timeout(duration, reason="User initiated $lockin study mode.")
             
             # Send a confirmation message
             embed = discord.Embed(

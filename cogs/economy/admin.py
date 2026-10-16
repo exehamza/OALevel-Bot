@@ -13,7 +13,7 @@ class EconomyAdmin(commands.Cog):
     @commands.command(name="addnodes")
     @commands.has_permissions(administrator=True)
     async def add_nodes(self, ctx, member: discord.Member, amount: int):
-        """Add nodes to a user's balance."""
+        """Add nodes to a user's liquid wallet."""
         if amount <= 0:
             embed = discord.Embed(
                 title=f"{self.CROSS} Invalid Allocation",
@@ -25,14 +25,22 @@ class EconomyAdmin(commands.Cog):
 
         await EconomyDB.update_balance(
             user_id=member.id, 
-            amount=amount, 
+            nodes=amount, 
             action_type="ADMIN_ADD", 
-            details=f"Nodes added by admin {ctx.author}"
+            details=f"Nodes added to wallet by admin {ctx.author}"
         )
+
+        updated = await EconomyDB.get_user(member.id)
+        wallet_now = updated.get("nodes", 0)
+        bank_now = updated.get("bank_nodes", 0)
 
         embed = discord.Embed(
             title=f"{self.TICK} Network Override Successful",
-            description=f"Successfully allocated `+{amount:,}` Nodes to {member.mention}'s mainframe.",
+            description=(
+                f"Allocated `+{amount:,}` Nodes to {member.mention}'s liquid wallet.\n\n"
+                f"• **Liquid Wallet:** `{wallet_now:,}` Nodes\n"
+                f"• **Secure Bank:** `{bank_now:,}` Nodes"
+            ),
             color=discord.Color.green()
         )
         embed.set_footer(text=f"Requested by {ctx.author.name}", icon_url=ctx.author.display_avatar.url)
@@ -41,7 +49,7 @@ class EconomyAdmin(commands.Cog):
     @commands.command(name="removenodes")
     @commands.has_permissions(administrator=True)
     async def remove_nodes(self, ctx, member: discord.Member, amount: int):
-        """Remove nodes from a user's balance."""
+        """Remove nodes from a user's liquid wallet first, spilling over into their secure bank if needed."""
         if amount <= 0:
             embed = discord.Embed(
                 title=f"{self.CROSS} Invalid Extraction",
@@ -52,19 +60,42 @@ class EconomyAdmin(commands.Cog):
             return await ctx.send(embed=embed)
 
         user_data = await EconomyDB.get_user(member.id)
-        if user_data["nodes"] < amount:
-            amount = user_data["nodes"]
+        wallet = user_data.get("nodes", 0) if user_data else 0
+        bank = user_data.get("bank_nodes", 0) if user_data else 0
+
+        if wallet + bank <= 0:
+            embed = discord.Embed(
+                title=f"{self.CROSS} Balance Already Zero",
+                description=f"{member.mention} already has `0` Nodes across both their wallet and bank.",
+                color=discord.Color.red()
+            )
+            embed.set_footer(text=f"Requested by {ctx.author.name}", icon_url=ctx.author.display_avatar.url)
+            return await ctx.send(embed=embed)
+
+        # Drain liquid wallet first, then spill remaining extraction into secure bank
+        from_wallet = min(wallet, amount)
+        remaining = amount - from_wallet
+        from_bank = min(bank, remaining)
+        total_removed = from_wallet + from_bank
 
         await EconomyDB.update_balance(
             user_id=member.id, 
-            amount=-amount, 
+            nodes=-from_wallet, 
+            bank=-from_bank, 
             action_type="ADMIN_REMOVE", 
-            details=f"Nodes removed by admin {ctx.author}"
+            details=f"Removed by admin {ctx.author} (Wallet: -{from_wallet}, Bank: -{from_bank})"
         )
+
+        new_wallet = wallet - from_wallet
+        new_bank = bank - from_bank
 
         embed = discord.Embed(
             title=f"{self.TICK} Network Override Successful",
-            description=f"Successfully extracted `-{amount:,}` Nodes from {member.mention}'s mainframe.",
+            description=(
+                f"Extracted a total of `-{total_removed:,}` Nodes from {member.mention}.\n\n"
+                f"• **Removed from Wallet:** `-{from_wallet:,}` (Now `{new_wallet:,}`)\n"
+                f"• **Removed from Bank:** `-{from_bank:,}` (Now `{new_bank:,}`)"
+            ),
             color=discord.Color.red()
         )
         embed.set_footer(text=f"Requested by {ctx.author.name}", icon_url=ctx.author.display_avatar.url)
@@ -72,9 +103,9 @@ class EconomyAdmin(commands.Cog):
 
     @commands.command(name="setnodes")
     @commands.has_permissions(administrator=True)
-    async def set_nodes(self, ctx, member: discord.Member, amount: int):
-        """Set a user's balance directly."""
-        if amount < 0:
+    async def set_nodes(self, ctx, member: discord.Member, wallet: int, bank: int = 0):
+        """Set a user's wallet and bank balance directly (bank defaults to 0)."""
+        if wallet < 0 or bank < 0:
             embed = discord.Embed(
                 title=f"{self.CROSS} Invalid Value",
                 description="Mainframe balances cannot be set below zero.",
@@ -83,11 +114,25 @@ class EconomyAdmin(commands.Cog):
             embed.set_footer(text=f"Requested by {ctx.author.name}", icon_url=ctx.author.display_avatar.url)
             return await ctx.send(embed=embed)
 
-        await EconomyDB.set_balance(member.id, amount)
+        user_data = await EconomyDB.get_user(member.id)
+        old_wallet = user_data.get("nodes", 0) if user_data else 0
+        old_bank = user_data.get("bank_nodes", 0) if user_data else 0
+
+        await EconomyDB.update_balance(
+            user_id=member.id,
+            nodes=wallet - old_wallet,
+            bank=bank - old_bank,
+            action_type="ADMIN_SET",
+            details=f"Balance set by admin {ctx.author} (Wallet: {wallet}, Bank: {bank})"
+        )
 
         embed = discord.Embed(
             title=f"{self.TICK} Balance Forced",
-            description=f"Forced {member.mention}'s wallet balance to exactly `{amount:,}` Nodes.",
+            description=(
+                f"Updated {member.mention}'s total balance:\n\n"
+                f"• **Liquid Wallet:** `{wallet:,}` Nodes\n"
+                f"• **Secure Bank:** `{bank:,}` Nodes"
+            ),
             color=discord.Color.gold()
         )
         embed.set_footer(text=f"Requested by {ctx.author.name}", icon_url=ctx.author.display_avatar.url)
@@ -170,7 +215,6 @@ class EconomyAdmin(commands.Cog):
         embed.set_footer(text=f"Requested by {ctx.author.name}", icon_url=ctx.author.display_avatar.url)
         await ctx.send(embed=embed)
 
-
     @economy_blacklist.command(name="add")
     @commands.has_permissions(administrator=True)
     async def blacklist_add(self, ctx, member: discord.Member):
@@ -193,7 +237,6 @@ class EconomyAdmin(commands.Cog):
         )
         embed.set_footer(text=f"Requested by {ctx.author.name}", icon_url=ctx.author.display_avatar.url)
         await ctx.send(embed=embed)
-
 
     @economy_blacklist.command(name="remove")
     @commands.has_permissions(administrator=True)
@@ -245,7 +288,6 @@ class EconomyAdmin(commands.Cog):
                 f"  └ **By:** <@{admin_id}> | **When:** {time_str}"
             )
 
-        # Simple page/list view (truncates safely if list is long)
         description = "\n\n".join(entries[:15])
         if len(entries) > 15:
             description += f"\n\n*...and {len(entries) - 15} more.*"
@@ -258,5 +300,5 @@ class EconomyAdmin(commands.Cog):
         embed.set_footer(text=f"Requested by {ctx.author.name}", icon_url=ctx.author.display_avatar.url)
         await ctx.send(embed=embed)
 
-def setup(bot):
-    bot.add_cog(EconomyAdmin(bot))
+async def setup(bot):
+    await bot.add_cog(EconomyAdmin(bot))

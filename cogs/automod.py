@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import sqlite3
 from datetime import datetime, timedelta, timezone
 import discord
 from discord.ext import commands
@@ -13,16 +14,51 @@ class AutoMod(commands.Cog):
         self.blocked_words = set()
         self.whitelisted_users = set()  # Tracks user IDs exempt from AutoMod
         
-        # Tracks violation timestamps: {user_id: [datetime, datetime...]}
-        self.infractions = {} 
+        # Normal mode (5 strikes, 1h rolling expiry): {user_id: [datetime, datetime...]}
+        self.infractions = {}
+        # Probation mode (3 strikes, lasts 24h after 1h mute): {user_id: {"until": datetime, "strikes": int}}
+        self.probation = {}
+
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        self.db_path = os.path.join(project_root, "data", "database.sqlite")
+        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         
+        self.init_db()
         self.load_automod_data()
+
+    def init_db(self):
+        """Ensures the mod_cases table exists in database.sqlite."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS mod_cases (
+                    case_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    guild_id INTEGER,
+                    user_id INTEGER,
+                    mod_id INTEGER,
+                    action_type TEXT,
+                    reason TEXT,
+                    duration TEXT,
+                    timestamp INTEGER
+                )
+            """)
+            conn.commit()
+
+    def log_case(self, guild_id: int, user_id: int, mod_id: int, action_type: str, reason: str, duration: str = None):
+        """Inserts an AutoMod mute record into mod_cases so it shows up in $logs."""
+        timestamp = int(datetime.now(timezone.utc).timestamp())
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO mod_cases (guild_id, user_id, mod_id, action_type, reason, duration, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (guild_id, user_id, mod_id, action_type, reason, duration, timestamp))
+            conn.commit()
 
     def load_automod_data(self):
         """Loads blocked words and whitelisted users from the configuration file."""
         os.makedirs(os.path.dirname(Config.BLOCKED_WORDS_FILE), exist_ok=True)
         
-        # Check if the file exists; if not, initialize default empty structure
         if not os.path.exists(Config.BLOCKED_WORDS_FILE):
             self.blocked_words = set()
             self.whitelisted_users = set()
@@ -35,7 +71,6 @@ class AutoMod(commands.Cog):
         except (json.JSONDecodeError, OSError):
             data = {}
 
-        # Parse blocked words safely
         if isinstance(data, dict):
             words = data.get("blocked_words", [])
             whitelist = data.get("whitelisted_users", [])
@@ -49,7 +84,6 @@ class AutoMod(commands.Cog):
             if str(word).strip()
         }
 
-        # Parse user IDs safely as integers
         self.whitelisted_users = {
             int(user_id)
             for user_id in whitelist
@@ -102,42 +136,92 @@ class AutoMod(commands.Cog):
             except discord.Forbidden:
                 return
 
-            # --- VIOLATION TRACKING LOGIC ---
             now = datetime.now(timezone.utc)
             user_id = message.author.id
 
+            # If user was on probation and survived the 24h window, reset them to Normal Mode (0/5)
+            if user_id in self.probation and now >= self.probation[user_id]["until"]:
+                del self.probation[user_id]
+                self.infractions.pop(user_id, None)
+
+            # --- STAGE 2: PROBATION MODE (3 strikes over 24h, no 1h decay -> 6h mute) ---
+            if user_id in self.probation:
+                self.probation[user_id]["strikes"] += 1
+                strikes = self.probation[user_id]["strikes"]
+
+                if strikes >= 3:
+                    # 3rd probation strike reached: clear probation & reset back to Normal Mode (0/5)
+                    del self.probation[user_id]
+                    self.infractions.pop(user_id, None)
+
+                    reason = "AutoMod: Reached 3/3 strikes during probation."
+                    try:
+                        await message.author.timeout(timedelta(hours=6), reason=reason)
+                        self.log_case(
+                            guild_id=message.guild.id,
+                            user_id=user_id,
+                            mod_id=self.bot.user.id,
+                            action_type="mute",
+                            reason=reason,
+                            duration="360m"
+                        )
+                        mute_embed = discord.Embed(
+                            description=f"🚫 {message.author.mention} **has been muted for 6 hours for repeating blacklisted language.** (3/3)",
+                            color=discord.Color.red()
+                        )
+                        return await message.channel.send(embed=mute_embed)
+                    except discord.Forbidden:
+                        return
+
+                warn_embed = discord.Embed(
+                    description=f"<a:Cross:1514986232294281426> {message.author.mention}, **that word is not allowed here.** ({strikes}/3)",
+                    color=discord.Color.red()
+                )
+                return await message.channel.send(embed=warn_embed, delete_after=10)
+
+            # --- STAGE 1: NORMAL MODE (5 strikes, 1h rolling expiry -> 1h mute) ---
             if user_id not in self.infractions:
                 self.infractions[user_id] = []
 
-            # 1. Clear out violation records older than 60 minutes (rolling window)
+            # Clear out violation records older than 1 hour
             self.infractions[user_id] = [
                 timestamp for timestamp in self.infractions[user_id]
-                if now - timestamp < timedelta(minutes=60)
+                if now - timestamp < timedelta(hours=1)
             ]
 
-            # 2. Add current violation timestamp
             self.infractions[user_id].append(now)
+            strikes = len(self.infractions[user_id])
 
-            # 3. Check if violations hit 5 within the timeframe
-            if len(self.infractions[user_id]) >= 5:
-                # Clear tracking list for this user so it restarts clean after timeout
+            if strikes >= 5:
+                # Clear normal strikes and place user in Probation Mode for 24h after the 1h mute ends (25h total)
                 self.infractions[user_id] = []
-                
+                self.probation[user_id] = {
+                    "until": now + timedelta(hours=1) + timedelta(hours=24),
+                    "strikes": 0
+                }
+
+                reason = "AutoMod: Exceeded word filter limits (5/5)."
                 try:
-                    # Apply a 30-minute native Discord timeout
-                    await message.author.timeout(timedelta(minutes=30), reason="AutoMod: Exceeded word filter limits.")
-                    
+                    await message.author.timeout(timedelta(hours=1), reason=reason)
+                    self.log_case(
+                        guild_id=message.guild.id,
+                        user_id=user_id,
+                        mod_id=self.bot.user.id,
+                        action_type="mute",
+                        reason=reason,
+                        duration="60m"
+                    )
                     mute_embed = discord.Embed(
-                        description=f"🚫 {message.author.mention} **has been muted for 30 minutes for repeating blacklisted language.**",
+                        description=f"🚫 {message.author.mention} **has been muted for 1 hour for repeating blacklisted language.** (5/5)",
                         color=discord.Color.red()
                     )
                     return await message.channel.send(embed=mute_embed)
                 except discord.Forbidden:
-                    pass
+                    return
 
             # Fallback normal message warning if under 5 violations
             warn_embed = discord.Embed(
-                description=f"<a:Cross:1514986232294281426> {message.author.mention}, **that word is not allowed here.** ({len(self.infractions[user_id])}/5)",
+                description=f"<a:Cross:1514986232294281426> {message.author.mention}, **that word is not allowed here.** ({strikes}/5)",
                 color=discord.Color.red()
             )
             await message.channel.send(embed=warn_embed, delete_after=10)

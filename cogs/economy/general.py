@@ -185,8 +185,8 @@ class EconomyGeneral(commands.Cog):
             embed = discord.Embed(
                 title=f"{self.CROSS} Mainframe Cooldown",
                 description=(
-                    "Monthly node drop is unavailable. Wait **{days}d"
-                    " {hours}h**."
+                    f"Monthly node drop is unavailable. Wait **{days}d"
+                    f" {hours}h**."
                 ),
                 color=discord.Color.red(),
             )
