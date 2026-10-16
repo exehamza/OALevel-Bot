@@ -1,14 +1,23 @@
-import os
 from pathlib import Path
 import discord
 from discord.ext import commands, tasks
 from config import Config
 
+# Everything here is anchored to the project folder, so it works no matter
+# which directory the bot is started from (cogs/export.py -> cogs -> project root).
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DATA_DIR = (PROJECT_ROOT / "data").resolve()
+
+
+def is_secret_name(name: str) -> bool:
+    """Never allow .env-style files (.env, .env.bak, .env.local, ...) to be sent."""
+    return name.lower().startswith(".env")
+
 
 class ExportCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        # Priority: Config.BACKUP_CHANNEL_ID -> fallback ID (Replace 123456789012345678 with your channel ID)
+        # Priority: Config.BACKUP_CHANNEL_ID -> fallback ID
         self.backup_channel_id = getattr(Config, "BACKUP_CHANNEL_ID", 1529530646244888720)
 
     async def cog_load(self):
@@ -28,18 +37,20 @@ class ExportCog(commands.Cog):
             print(f"[AutoBackup] Could not find channel with ID {self.backup_channel_id}. Skipping automatic backup.")
             return
 
-        data_dir = Path(__file__).resolve().parents[1] / "data" if hasattr(Config, "PROJECT_ROOT") else Path("data")
-        
-        if not data_dir.exists() or not any(data_dir.iterdir()):
+        if not DATA_DIR.exists() or not any(DATA_DIR.iterdir()):
             print("[AutoBackup] 'data/' directory is missing or empty. Nothing to export.")
             return
 
         attachments = []
         file_names = []
 
-        for file_path in data_dir.glob("*"):
-            # Exclude directories or temporary export text files
-            if file_path.is_file() and not file_path.name.startswith("export_"):
+        for file_path in DATA_DIR.glob("*"):
+            # Exclude directories, temporary export files, and .env-style files
+            if (
+                file_path.is_file()
+                and not file_path.name.startswith("export_")
+                and not is_secret_name(file_path.name)
+            ):
                 attachments.append(discord.File(str(file_path), filename=file_path.name))
                 file_names.append(f"`{file_path.name}`")
 
@@ -68,7 +79,7 @@ class ExportCog(commands.Cog):
     @commands.command(name="export", help="Exports internal configuration or database files manually. Usage: $export economy.db")
     @commands.has_permissions(administrator=True)
     async def export_file(self, ctx, filename: str = None):
-        """Manually exports a specific file on demand."""
+        """Manually exports a specific file from data/ on demand."""
         try:
             await ctx.message.delete()
         except discord.HTTPException:
@@ -86,25 +97,33 @@ class ExportCog(commands.Cog):
 
         filename_clean = filename.strip()
 
-        # Look inside data/ first (where state data lives), then fallback to root
-        data_path = os.path.join("data", filename_clean)
-        root_path = filename_clean
-
-        if os.path.exists(data_path):
-            file_path = data_path
-        elif os.path.exists(root_path):
-            file_path = root_path
-        else:
+        # Only plain file names inside data/ are allowed: no folders, no ../ tricks,
+        # and never .env-style files.
+        if (
+            not filename_clean
+            or Path(filename_clean).name != filename_clean
+            or is_secret_name(filename_clean)
+        ):
             embed = discord.Embed(
-                description=f"<a:Cross:1514986232294281426> **Could not locate** `{filename_clean}` in `data/` or project root.",
+                description="<a:Cross:1514986232294281426> **That file can't be exported.** Only plain file names from `data/` are allowed.",
+                color=discord.Color.red()
+            )
+            return await ctx.send(embed=embed)
+
+        # resolve() follows symlinks, so the parent check below also stops sneaky links
+        file_path = (DATA_DIR / filename_clean).resolve()
+
+        if file_path.parent != DATA_DIR or not file_path.is_file():
+            embed = discord.Embed(
+                description=f"<a:Cross:1514986232294281426> **Could not locate** `{filename_clean}` in `data/`.",
                 color=discord.Color.red()
             )
             return await ctx.send(embed=embed)
 
         try:
-            discord_file = discord.File(file_path, filename=filename_clean)
+            discord_file = discord.File(str(file_path), filename=file_path.name)
             embed = discord.Embed(
-                description=f"<:Tick:1514986183489360087> **Successfully exported** `{filename_clean}`.",
+                description=f"<:Tick:1514986183489360087> **Successfully exported** `{file_path.name}`.",
                 color=discord.Color.green()
             )
             await ctx.send(embed=embed, file=discord_file)
