@@ -105,13 +105,12 @@ class Moderation(commands.Cog):
         print("Moderation module loaded successfully.")
         
     @commands.command(name="removecase", aliases=["delcase", "deletecase"])
-    @commands.has_permissions(administrator=True) # Or manage_messages, depending on your setup
+    @commands.has_permissions(administrator=True)
     async def remove_case(self, ctx, case_id: int):
         """Removes a moderation case from the logs using its Case ID."""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
-        # Fetch case data before deleting so we can use it in the log embed
         cursor.execute("""
             SELECT user_id, mod_id, action_type, reason 
             FROM mod_cases 
@@ -130,19 +129,16 @@ class Moderation(commands.Cog):
 
         user_id, target_mod_id, action_type, original_reason = case_data
 
-        # Delete the record
         cursor.execute("DELETE FROM mod_cases WHERE case_id = ? AND guild_id = ?", (case_id, ctx.guild.id))
         conn.commit()
         conn.close()
 
-        # Send confirmation to the context channel
         embed = discord.Embed(
             description=f"<:Tick:1514986183489360087> Successfully deleted Case ID `#{case_id}`.",
             color=discord.Color.green()
         )
         await ctx.send(embed=embed)
 
-        # Format and send the mod log
         fields = [
             ("Target User", f"<@{user_id}> (ID: {user_id})", False),
             ("Removed By", f"{ctx.author.mention} (ID: {ctx.author.id})", False),
@@ -157,7 +153,7 @@ class Moderation(commands.Cog):
             fields=fields
         )
 
-    # --- LOGS / HISTORY COMMAND ---
+    # --- LOGS / HISTORY COMMAND (WITH PAGINATION) ---
     @commands.command(name="logs", aliases=["history", "cases"], help="Shows moderation history for a specific user.")
     @commands.guild_only()
     @commands.has_permissions(manage_messages=True)
@@ -176,18 +172,18 @@ class Moderation(commands.Cog):
         rows = cursor.fetchall()
         conn.close()
 
-        embed = discord.Embed(
-            title=f"Mod Logs for {target.name}",
-            color=getattr(Config, "EMBED_COLOR", discord.Color.blue())
-        )
-        embed.set_thumbnail(url=target.display_avatar.url)
+        embed_color = getattr(Config, "EMBED_COLOR", discord.Color.blue())
 
         if not rows:
-            embed.description = f"✨ {target.mention} has a completely clean record."
+            embed = discord.Embed(
+                title=f"Mod Logs for {target.name}",
+                description=f"✨ {target.mention} has a completely clean record.",
+                color=embed_color
+            )
+            embed.set_thumbnail(url=target.display_avatar.url)
             return await ctx.send(embed=embed)
 
-        embed.description = f"Found **{len(rows)}** total infraction record(s) for {target.mention}:\n\n"
-        
+        case_entries = []
         for case_id, mod_id, action_type, reason, duration, timestamp in rows:
             duration_str = f" ({duration})" if duration else ""
             case_details = (
@@ -195,15 +191,70 @@ class Moderation(commands.Cog):
                 f"**Moderator:** <@{mod_id}>\n"
                 f"**Reason:** {reason}\n"
                 f"**Date:** <t:{timestamp}:F> (<t:{timestamp}:R>)\n"
-                f"{"—" * 20}"
+                f"{'—' * 18}"
             )
-            # Avoid breaking embed limits (max 4096 characters in descriptions)
-            if len(embed.description) + len(case_details) > 4000:
-                embed.description += "*...and older records truncated due to character limits.*"
-                break
-            embed.description += case_details + "\n"
+            case_entries.append(case_details)
 
-        await ctx.send(embed=embed)
+        items_per_page = 5
+        pages = [case_entries[i:i + items_per_page] for i in range(0, len(case_entries), items_per_page)]
+        total_pages = len(pages)
+        current_page = 0
+
+        def build_embed(page_index):
+            embed = discord.Embed(
+                title=f"Mod Logs for {target.name}",
+                description=(
+                    f"Found **{len(rows)}** total infraction record(s) for {target.mention}:\n\n"
+                    + "\n".join(pages[page_index])
+                ),
+                color=embed_color
+            )
+            embed.set_thumbnail(url=target.display_avatar.url)
+            embed.set_footer(text=f"Page {page_index + 1} of {total_pages} • Total Cases: {len(rows)}")
+            return embed
+
+        class PaginationView(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=60.0)
+                self.index = current_page
+                self.message = None
+                self.update_button_states()
+
+            def update_button_states(self):
+                self.prev_button.disabled = self.index == 0
+                self.next_button.disabled = self.index == total_pages - 1
+
+            @discord.ui.button(label="◀ Previous", style=discord.ButtonStyle.blurple)
+            async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+                if interaction.user.id != ctx.author.id:
+                    return await interaction.response.send_message("You can't use these buttons!", ephemeral=True)
+
+                self.index -= 1
+                self.update_button_states()
+                await interaction.response.edit_message(embed=build_embed(self.index), view=self)
+
+            @discord.ui.button(label="Next ▶", style=discord.ButtonStyle.blurple)
+            async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+                if interaction.user.id != ctx.author.id:
+                    return await interaction.response.send_message("You can't use these buttons!", ephemeral=True)
+
+                self.index += 1
+                self.update_button_states()
+                await interaction.response.edit_message(embed=build_embed(self.index), view=self)
+
+            async def on_timeout(self):
+                for item in self.children:
+                    item.disabled = True
+                if self.message:
+                    try:
+                        await self.message.edit(view=self)
+                    except discord.HTTPException:
+                        pass
+
+        view = PaginationView() if total_pages > 1 else None
+        sent_message = await ctx.send(embed=build_embed(current_page), view=view)
+        if view:
+            view.message = sent_message
 
     # --- PURGE COMMAND ---
     @commands.command(name="purge", aliases=["clear"], help="Purges a set number of messages from the channel, optionally filtered by user.")
@@ -220,7 +271,6 @@ class Moderation(commands.Cog):
         elif isinstance(arg1, int):
             amount = arg1
 
-        # Validation checks
         if amount <= 0:
             embed = discord.Embed(
                 description="<a:Cross:1514986232294281426> **Invalid format or amount.** Use one of the following:\n"
@@ -241,20 +291,15 @@ class Moderation(commands.Cog):
             except discord.HTTPException: pass
             return await ctx.send(embed=embed, delete_after=5)
 
-        # Delete the command invoking message first
         try: 
             await ctx.message.delete()
         except discord.HTTPException: 
             pass
 
         try:
-            # If targeting a member, we look deeper into history to find their messages
             search_limit = 1000 if target_member else amount
-            
-            # Modern discord.py v2 way to flatten history instantly into memory
             messages = [msg async for msg in ctx.channel.history(limit=search_limit)]
             
-            # Filter down to what we actually need to delete
             if target_member:
                 to_delete = [msg for msg in messages if msg.author == target_member][:amount]
             else:
@@ -262,7 +307,6 @@ class Moderation(commands.Cog):
 
             actual_deleted = len(to_delete)
 
-            # Bulk delete the list in one single API drop
             if actual_deleted > 0:
                 await ctx.channel.delete_messages(to_delete)
 
@@ -279,7 +323,6 @@ class Moderation(commands.Cog):
             )
             return await ctx.send(embed=embed, delete_after=5)
 
-        # Logging and Response Output
         embed_color = getattr(Config, "EMBED_COLOR", discord.Color.blue())
         user_str = f" sent by {target_member.mention}" if target_member else ""
         
@@ -402,7 +445,6 @@ class Moderation(commands.Cog):
         try: await ctx.message.delete()
         except discord.HTTPException: pass
 
-        # Missing parameter check
         if user_spec is None:
             embed = discord.Embed(
                 description="<a:Cross:1514986232294281426> **Please specify a user to unban.**\n\n**Usage:** `unban <username/ID>`",
@@ -412,23 +454,20 @@ class Moderation(commands.Cog):
 
         target_user = None
 
-        # 1. Try to fetch directly by ID if user_spec is numeric
         if user_spec.isdigit():
             try:
                 ban_entry = await ctx.guild.fetch_ban(discord.Object(id=int(user_spec)))
                 target_user = ban_entry.user
             except discord.NotFound:
-                pass # Not in ban list or invalid ID
+                pass
 
-        # 2. If not found by ID, fall back to searching ban list by username / tag
         if not target_user:
-            async for ban_entry in ctx.guild.bans(limit=None): # limit=None checks ALL bans
+            async for ban_entry in ctx.guild.bans(limit=None):
                 u = ban_entry.user
                 if user_spec.lower() in (str(u).lower(), u.name.lower(), f"{u.name}#{u.discriminator}".lower()):
                     target_user = u
                     break
 
-        # 3. If still not found, throw error
         if not target_user:
             embed = discord.Embed(
                 description=f"<a:Cross:1514986232294281426> **Could not find a banned user matching** `{user_spec}`.",
@@ -436,7 +475,6 @@ class Moderation(commands.Cog):
             )
             return await ctx.send(embed=embed)
 
-        # Unban and log
         await ctx.guild.unban(target_user)
         self.log_case(ctx.guild.id, target_user.id, ctx.author.id, "unban", "No reason provided")
 
@@ -591,7 +629,6 @@ class Moderation(commands.Cog):
         try: await ctx.message.delete()
         except discord.HTTPException: pass
 
-        # Missing parameter check
         if member is None:
             embed = discord.Embed(
                 description="<a:Cross:1514986232294281426> **Please specify a member to warn.**\n\n**Usage:** `warn <@member/ID> [reason]`",
@@ -615,7 +652,7 @@ class Moderation(commands.Cog):
 
         dm_embed = discord.Embed(
             title=f"⚠️ You have been warned in {ctx.guild.name}",
-            color=0xf39c12, # A nice warning orange/yellow
+            color=0xf39c12,
             timestamp=datetime.datetime.now(datetime.timezone.utc)
         )
         dm_embed.add_field(name="Reason", value=reason, inline=False)
@@ -624,17 +661,14 @@ class Moderation(commands.Cog):
         except discord.Forbidden:
             pass
 
-        # Database insertion using your existing internal method structure
         self.log_case(ctx.guild.id, member.id, ctx.author.id, "warn", reason)
 
-        # Response embed sent back to the channel matching your tick/cross style
         embed = discord.Embed(
             description=f"<:Tick:1514986183489360087> **{member.mention}** has been warned.",
             color=Config.EMBED_COLOR
         )
         await ctx.send(embed=embed)
 
-        # Logging sent to your moderation channel layout
         await self.send_mod_log(
             ctx,
             "Member Warned",
@@ -685,7 +719,6 @@ class Moderation(commands.Cog):
     @commands.command(name="reply", help="Makes the bot reply to a message in any channel without exposing staff.")
     @commands.has_permissions(administrator=True)
     async def reply(self, ctx, channel: discord.TextChannel, message_id: int, *, message: str):
-        # Delete staff command instantly so no one sees who ran it
         try:
             await ctx.message.delete()
         except (discord.Forbidden, discord.NotFound):
@@ -699,7 +732,6 @@ class Moderation(commands.Cog):
                 description="<a:Cross:1514986232294281426> **Error: Message not found in specified channel.**",
                 color=discord.Color.red()
             )
-            # Sends error in current channel silently to staff
             await ctx.send(embed=embed, delete_after=5)
         except discord.HTTPException:
             embed = discord.Embed(
