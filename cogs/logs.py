@@ -1,6 +1,6 @@
 import asyncio
 from collections import defaultdict, deque
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import discord
 from discord.ext import commands
 from discord import utils
@@ -147,7 +147,6 @@ class Logs(commands.Cog):
                 embed.timestamp = utils.utcnow()
                 await log_channel.send(embed=embed)
 
-    # FIXED: Indented properly to sit INSIDE the Logs class wrapper
     @commands.Cog.listener()
     async def on_member_remove(self, member):
         log_channel = await self.get_log_channel(member.guild)
@@ -181,7 +180,6 @@ class Logs(commands.Cog):
         if message.author.bot or message.guild is None:
             return
             
-        # appendleft sets index 0 to the most recent deleted message
         self.snipe_storage[message.channel.id].appendleft({
             "content": message.content,
             "author": message.author,
@@ -189,12 +187,11 @@ class Logs(commands.Cog):
         })
 
     @commands.command(name="snipe", help="Snipe up to the last 5 deleted messages in this channel. Staff only.")
-    @commands.has_permissions(administrator=True) # Cleaned up permission syntax
+    @commands.has_permissions(administrator=True)
     async def snipe(self, ctx, index: int = 1):
         if index < 1 or index > 5:
             return await ctx.send("You can only snipe historical messages between 1 and 5!")
 
-        # Using .get() prevents creating unneeded empty deques in memory
         channel_history = self.snipe_storage.get(ctx.channel.id)
         if not channel_history:
             return await ctx.send("There are no recently deleted messages recorded in this channel.")
@@ -214,9 +211,28 @@ class Logs(commands.Cog):
         embed.set_footer(text=f"Sniped position: {index}/{len(channel_history)} | Sent at")
         await ctx.send(embed=embed)
 
-    # --- 6. WELCOME SYSTEM ---
+    # --- 6. WELCOME SYSTEM & ACCOUNT AGE GATE ---
     @commands.Cog.listener()
     async def on_member_join(self, member):
+        # 1. Check if account is younger than 1 month (30 days)
+        account_age = utils.utcnow() - member.created_at
+        if account_age < timedelta(days=30):
+            try:
+                dm_embed = discord.Embed(
+                    description="<a:Cross:1514986232294281426> **Account is too young to be allowed**",
+                    color=discord.Color.red()
+                )
+                await member.send(embed=dm_embed)
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+
+            try:
+                await member.kick(reason="Account is too young to be allowed (< 1 month)")
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+            return
+
+        # 2. Otherwise, send normal welcome message
         welcome_channel = member.guild.get_channel(Config.WELCOME_CHANNEL_ID)
         if not welcome_channel:
             print(f"Warning: Welcome channel ID {Config.WELCOME_CHANNEL_ID} not found.")

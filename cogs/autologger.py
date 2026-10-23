@@ -92,8 +92,6 @@ def format_age(delta: timedelta) -> str:
         count, seconds = divmod(seconds, size)
         if count:
             parts.append(f"{count} {name}{'' if count == 1 else 's'}")
-            if len(parts) == 2:
-                break
     return ", ".join(parts) or "0 secs"
 
 

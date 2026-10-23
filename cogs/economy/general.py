@@ -18,6 +18,137 @@ def not_in_thread():
     return commands.check(predicate)
 
 
+class TransferConfirmView(discord.ui.View):
+    def __init__(self, cog, ctx: commands.Context, recipient: discord.Member, amount: int, tax_amount: int, received_amount: int, is_top_3: bool):
+        super().__init__(timeout=60.0)
+        self.cog = cog
+        self.ctx = ctx
+        self.recipient = recipient
+        self.amount = amount
+        self.tax_amount = tax_amount
+        self.received_amount = received_amount
+        self.is_top_3 = is_top_3
+        self.message = None
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.ctx.author.id:
+            await interaction.response.send_message(
+                "Only the sender of this transfer can confirm or cancel it.",
+                ephemeral=True
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="Confirm Transfer", style=discord.ButtonStyle.success, emoji="✅")
+    async def confirm_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        self.stop()
+
+        # Re-verify sender balance at confirmation time to prevent double-spending
+        sender_profile = await EconomyDB.get_profile(self.ctx.author.id)
+        sender_wallet = sender_profile.get("nodes", 0) if sender_profile else 0
+
+        if sender_wallet < self.amount:
+            embed = discord.Embed(
+                title=f"{self.cog.CROSS} Transfer Failed — Insufficient Funds",
+                description=(
+                    f"Your wallet balance changed before confirming! You only have `{sender_wallet:,}` Nodes available.\n"
+                    f"**Required:** `{self.amount:,}` Nodes"
+                ),
+                color=discord.Color.red(),
+            )
+            embed.set_footer(
+                text=f"Requested by {self.ctx.author.name}",
+                icon_url=self.ctx.author.display_avatar.url,
+            )
+            return await interaction.message.edit(embed=embed, view=None)
+
+        recipient_profile = await EconomyDB.get_profile(self.recipient.id)
+        if not recipient_profile:
+            await EconomyDB.register_user(self.recipient.id)
+
+        await EconomyDB.update_balance(self.ctx.author.id, nodes=-self.amount)
+        await EconomyDB.update_balance(self.recipient.id, nodes=self.received_amount)
+
+        await EconomyDB.log_transaction(
+            self.ctx.author.id,
+            "TRANSFER_SENT",
+            -self.amount,
+            f"Sent to {self.recipient.display_name} (Tax: {self.tax_amount:,})",
+        )
+        await EconomyDB.log_transaction(
+            self.recipient.id,
+            "TRANSFER_RECV",
+            self.received_amount,
+            f"Received from {self.ctx.author.display_name}",
+        )
+
+        embed = discord.Embed(
+            title=f"{self.cog.TICK} Network Transfer Complete",
+            description=f"Successfully transferred Nodes from your wallet to {self.recipient.mention}.",
+            color=discord.Color.green(),
+        )
+        embed.set_thumbnail(url=self.recipient.display_avatar.url)
+        embed.add_field(name="📤 Sender", value=self.ctx.author.mention, inline=True)
+        embed.add_field(name="📥 Recipient", value=self.recipient.mention, inline=True)
+
+        if self.tax_amount > 0:
+            embed.add_field(
+                name="🪙 Transfer Breakdown",
+                value=(
+                    f"• **Gross Sent:** `{self.amount:,}` Nodes\n"
+                    f"• **Network Tax (15%):** `-{self.tax_amount:,}` Nodes\n"
+                    f"• **Net Received:** `+{self.received_amount:,}` Nodes"
+                ),
+                inline=False,
+            )
+        else:
+            exemption_note = " *(Top 3 Leaderboard VIP Exemption)*" if self.is_top_3 and self.amount > 10000 else ""
+            embed.add_field(
+                name="🪙 Amount Received",
+                value=f"`{self.received_amount:,}` Nodes{exemption_note}",
+                inline=False,
+            )
+
+        embed.set_footer(
+            text=f"Requested by {self.ctx.author.name}",
+            icon_url=self.ctx.author.display_avatar.url,
+        )
+        await interaction.message.edit(embed=embed, view=None)
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger, emoji="❌")
+    async def cancel_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        self.stop()
+
+        embed = discord.Embed(
+            title=f"{self.cog.CROSS} Transfer Cancelled",
+            description=f"Cancelled the transfer of `{self.amount:,}` Nodes to {self.recipient.mention}.",
+            color=discord.Color.red(),
+        )
+        embed.set_footer(
+            text=f"Requested by {self.ctx.author.name}",
+            icon_url=self.ctx.author.display_avatar.url,
+        )
+        await interaction.message.edit(embed=embed, view=None)
+
+    async def on_timeout(self):
+        if self.message:
+            embed = discord.Embed(
+                title=f"{self.cog.CROSS} Transfer Timed Out",
+                description="You did not confirm the transfer within 60 seconds. No Nodes were deducted.",
+                color=discord.Color.red(),
+            )
+            embed.set_footer(
+                text=f"Requested by {self.ctx.author.name}",
+                icon_url=self.ctx.author.display_avatar.url,
+            )
+            try:
+                await self.message.edit(embed=embed, view=None)
+            except discord.HTTPException:
+                pass
+
+
 class EconomyGeneral(commands.Cog):
 
     def __init__(self, bot):
@@ -36,7 +167,6 @@ class EconomyGeneral(commands.Cog):
             await ctx.send(embed=embed)
             
     async def cog_check(self, ctx):
-        # Exempt administrators from checking, or let them execute admin commands
         if ctx.author.guild_permissions.administrator:
             return True
 
@@ -47,7 +177,6 @@ class EconomyGeneral(commands.Cog):
 
     @commands.Cog.listener()
     async def on_ready(self):
-        # Automatically make sure tables exist when the bot boots up
         await EconomyDB.init_db()
 
     @commands.command(name="balance", aliases=["bal"])
@@ -121,11 +250,10 @@ class EconomyGeneral(commands.Cog):
             await EconomyDB.register_user(ctx.author.id)
             user_data = await EconomyDB.get_user(ctx.author.id)
 
-        reward = 100  # Base daily reward amount
+        reward = 100
         current_time = time.time()
         last_daily = user_data.get("last_daily") if user_data else None
 
-        # Cooldown check: 86400 seconds = 24 hours
         if last_daily and (current_time - last_daily) < 86400:
             time_left = 86400 - (current_time - last_daily)
             hours, remainder = divmod(int(time_left), 3600)
@@ -145,7 +273,6 @@ class EconomyGeneral(commands.Cog):
             )
             return await ctx.send(embed=embed)
 
-        # Update balance and save transaction record
         await EconomyDB.update_balance(ctx.author.id, nodes=reward)
         await EconomyDB.log_transaction(
             ctx.author.id, "DAILY", reward, "Claimed daily node reward"
@@ -172,11 +299,10 @@ class EconomyGeneral(commands.Cog):
             await EconomyDB.register_user(ctx.author.id)
             user_data = await EconomyDB.get_user(ctx.author.id)
 
-        reward = 3500  # Base monthly reward amount
+        reward = 3500
         current_time = time.time()
         last_monthly = user_data.get("last_monthly") if user_data else None
 
-        # Cooldown check: 2,592,000 seconds = 30 days
         if last_monthly and (current_time - last_monthly) < 2592000:
             time_left = 2592000 - (current_time - last_monthly)
             days, remainder = divmod(int(time_left), 86400)
@@ -196,7 +322,6 @@ class EconomyGeneral(commands.Cog):
             )
             return await ctx.send(embed=embed)
 
-        # Update balance and save transaction record
         await EconomyDB.update_balance(ctx.author.id, nodes=reward)
         await EconomyDB.log_transaction(
             ctx.author.id, "MONTHLY", reward, "Claimed monthly node reward"
@@ -339,7 +464,7 @@ class EconomyGeneral(commands.Cog):
     @commands.command(name="give", aliases=["transfer", "send"])
     @not_in_thread()
     async def pay(self, ctx, recipient: discord.Member, amount: int):
-        """Transfer nodes from your wallet to another user."""
+        """Transfer nodes from your wallet to another user (with confirmation)."""
         # 1. Prevent transferring to yourself
         if recipient.id == ctx.author.id:
             embed = discord.Embed(
@@ -404,69 +529,50 @@ class EconomyGeneral(commands.Cog):
 
             received_amount = amount - tax_amount
 
-            # 7. Ensure recipient profile exists
-            recipient_profile = await EconomyDB.get_profile(recipient.id)
-            if not recipient_profile:
-                await EconomyDB.register_user(recipient.id)
+            # 7. Prompt sender for confirmation before executing
+            confirm_embed = discord.Embed(
+                title="⚠️ Confirm Network Transfer",
+                description=f"Are you sure you want to send Nodes to {recipient.mention}?",
+                color=discord.Color.gold(),
+            )
+            confirm_embed.set_thumbnail(url=recipient.display_avatar.url)
+            confirm_embed.add_field(name="📤 Sender", value=ctx.author.mention, inline=True)
+            confirm_embed.add_field(name="📥 Recipient", value=recipient.mention, inline=True)
 
-            # 8. Process the transfer
-            await EconomyDB.update_balance(ctx.author.id, nodes=-amount)
-            await EconomyDB.update_balance(recipient.id, nodes=received_amount)
-
-            # 9. Log transaction records for both users
-            await EconomyDB.log_transaction(
-                ctx.author.id,
-                "TRANSFER_SENT",
-                -amount,
-                f"Sent to {recipient.display_name} (Tax: {tax_amount:,})",
-            )
-            await EconomyDB.log_transaction(
-                recipient.id,
-                "TRANSFER_RECV",
-                received_amount,
-                f"Received from {ctx.author.display_name}",
-            )
-
-            # 10. Send confirmation embed
-            embed = discord.Embed(
-                title=f"{self.TICK} Network Transfer Complete",
-                description=(
-                    f"Successfully transferred Nodes from your wallet to {recipient.mention}."
-                ),
-                color=discord.Color.green(),
-            )
-            embed.set_thumbnail(url=recipient.display_avatar.url)
-            embed.add_field(
-                name="📤 Sender", value=ctx.author.mention, inline=True
-            )
-            embed.add_field(
-                name="📥 Recipient", value=recipient.mention, inline=True
-            )
-            
             if tax_amount > 0:
-                embed.add_field(
+                confirm_embed.add_field(
                     name="🪙 Transfer Breakdown",
                     value=(
                         f"• **Gross Sent:** `{amount:,}` Nodes\n"
                         f"• **Network Tax (15%):** `-{tax_amount:,}` Nodes\n"
-                        f"• **Net Received:** `+{received_amount:,}` Nodes"
+                        f"• **Net Recipient Gets:** `+{received_amount:,}` Nodes"
                     ),
                     inline=False,
                 )
             else:
                 exemption_note = " *(Top 3 Leaderboard VIP Exemption)*" if is_top_3 and amount > 10000 else ""
-                embed.add_field(
-                    name="🪙 Amount Received",
+                confirm_embed.add_field(
+                    name="🪙 Amount to Transfer",
                     value=f"`{received_amount:,}` Nodes{exemption_note}",
                     inline=False,
                 )
 
-            embed.set_footer(
-                text=f"Requested by {ctx.author.name}",
+            confirm_embed.set_footer(
+                text=f"Requested by {ctx.author.name} • Expires in 60s",
                 icon_url=ctx.author.display_avatar.url,
             )
 
-            await ctx.send(embed=embed)
+            view = TransferConfirmView(
+                cog=self,
+                ctx=ctx,
+                recipient=recipient,
+                amount=amount,
+                tax_amount=tax_amount,
+                received_amount=received_amount,
+                is_top_3=is_top_3,
+            )
+            sent_msg = await ctx.send(embed=confirm_embed, view=view)
+            view.message = sent_msg
 
         except Exception as e:
             print(f"❌ Error inside pay command: {e}")
