@@ -1,6 +1,8 @@
+import asyncio
+import json
 import os
 import re
-import asyncio
+import time
 import discord
 from discord.ext import commands
 
@@ -22,24 +24,54 @@ TARGET_CHANNELS = [
     1486373117054943326, 1486373743432437890, 1486374601658335262, 1486372629161050284,
 ]
 
+
 class AutoMessage(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        # Structure: { channel_id: { "interval": int, "session": str, "last_message": discord.Message, "task": asyncio.Task } }
-        self.active_channels = {}
-
-        # Custom Emojis
         self.tick = "<:Tick:1514986183489360087>"
         self.cross = "<a:Cross:1514986232294281426>"
 
-    def cog_unload(self):
-        """Cancels all active background tasks when the cog is reloaded or unloaded."""
-        for channel_id, data in list(self.active_channels.items()):
-            task = data.get("task")
-            if task and not task.done():
-                task.cancel()
-        self.active_channels.clear()
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        self.state_file = os.path.join(project_root, "data", "automessage_state.json")
+        os.makedirs(os.path.dirname(self.state_file), exist_ok=True)
 
+        self.state = self._load_state()
+        self.master_task: asyncio.Task | None = None
+        self._sem = asyncio.Semaphore(10)  # Smooth concurrency without hitting Discord 429s
+        self._lock = asyncio.Lock()
+        self._initialized = False
+
+    def cog_unload(self):
+        """Cancels the master loop when the cog is reloaded or unloaded."""
+        if self.master_task and not self.master_task.done():
+            self.master_task.cancel()
+
+    # --- STATE PERSISTENCE ---
+    def _load_state(self) -> dict:
+        if os.path.exists(self.state_file):
+            try:
+                with open(self.state_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if isinstance(data, dict):
+                        return {
+                            "active": bool(data.get("active", False)),
+                            "interval": int(data.get("interval", 3600)),
+                            "time_str": str(data.get("time_str", "1h")),
+                            "session": str(data.get("session", "")),
+                            "messages": {str(k): int(v) for k, v in data.get("messages", {}).items()},
+                        }
+            except (json.JSONDecodeError, OSError, ValueError):
+                pass
+        return {"active": False, "interval": 3600, "time_str": "1h", "session": "", "messages": {}}
+
+    def _save_state(self):
+        try:
+            with open(self.state_file, "w", encoding="utf-8") as f:
+                json.dump(self.state, f, indent=2)
+        except OSError as e:
+            print(f"[AutoMessage] Failed to save state: {e}")
+
+    # --- HELPERS ---
     def parse_time(self, time_str: str) -> int:
         """Parses a time string like 1h, 30m, 2d into seconds."""
         time_dict = {"d": 86400, "h": 3600, "m": 60, "s": 1}
@@ -64,40 +96,113 @@ class AutoMessage(commands.Cog):
         embed.set_footer(text="Not following these rules will result in heavy moderation actions (timeout/ban).")
         return embed
 
-    async def run_automessage_loop(self, channel_id: int):
-        """Independent background loop for a specific target channel."""
-        try:
-            while True:
-                data = self.active_channels.get(channel_id)
-                if not data:
-                    break
+    async def _resolve_channel(self, channel_id: int):
+        channel = self.bot.get_channel(channel_id)
+        if channel is None:
+            try:
+                channel = await self.bot.fetch_channel(channel_id)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                return None
+        return channel
 
-                channel = self.bot.get_channel(channel_id)
-                if not channel:
-                    try:
-                        channel = await self.bot.fetch_channel(channel_id)
-                    except discord.HTTPException:
+    async def _delete_single_message(self, channel_id: int, message_id: int):
+        async with self._sem:
+            channel = await self._resolve_channel(channel_id)
+            if not channel:
+                return
+            try:
+                await channel.get_partial_message(message_id).delete()
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                pass
+
+    async def delete_all_tracked_messages(self):
+        """Deletes all stored widget messages concurrently across all channels."""
+        tracked = list(self.state.get("messages", {}).items())
+        if not tracked:
+            return
+
+        await asyncio.gather(
+            *(self._delete_single_message(int(ch_id), int(msg_id)) for ch_id, msg_id in tracked),
+            return_exceptions=True
+        )
+        self.state["messages"] = {}
+        self._save_state()
+
+    async def _cycle_single_channel(self, channel_id: int, embed: discord.Embed):
+        """Deletes the previous widget in a channel (if any) and sends the new one."""
+        old_msg_id = self.state["messages"].get(str(channel_id))
+
+        async with self._sem:
+            channel = await self._resolve_channel(channel_id)
+            if not channel:
+                return None
+
+            if old_msg_id:
+                try:
+                    await channel.get_partial_message(int(old_msg_id)).delete()
+                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                    pass
+
+            try:
+                new_msg = await channel.send(embed=embed)
+                return str(channel_id), new_msg.id
+            except (discord.Forbidden, discord.HTTPException) as e:
+                print(f"[AutoMessage] Failed to post in channel {channel_id}: {e}")
+                return None
+
+    # --- UNIFIED MASTER LOOP ---
+    async def run_master_loop(self):
+        """Single synchronized loop that updates all target channels together."""
+        try:
+            await self.bot.wait_until_ready()
+            while self.state.get("active"):
+                cycle_start = time.monotonic()
+
+                async with self._lock:
+                    if not self.state.get("active"):
                         break
 
-                # 1. Delete previous auto-message if present
-                if data.get("last_message"):
-                    try:
-                        await data["last_message"].delete()
-                    except discord.HTTPException:
-                        pass  # Ignored if manually deleted
+                    embed = self.get_rules_embed(self.state["session"])
+                    results = await asyncio.gather(
+                        *(self._cycle_single_channel(ch_id, embed) for ch_id in TARGET_CHANNELS),
+                        return_exceptions=True
+                    )
 
-                # 2. Send updated embed message
-                try:
-                    embed = self.get_rules_embed(data["session"])
-                    data["last_message"] = await channel.send(embed=embed)
-                except discord.HTTPException as e:
-                    print(f"Failed to post auto-message in channel {channel_id}: {e}")
+                    new_messages = {}
+                    for res in results:
+                        if isinstance(res, tuple) and len(res) == 2:
+                            ch_id_str, msg_id = res
+                            new_messages[ch_id_str] = msg_id
 
-                # Wait for interval before next repost
-                await asyncio.sleep(data["interval"])
+                    self.state["messages"] = new_messages
+                    self._save_state()
+
+                # Subtract execution time so every cycle stays locked to the exact interval
+                elapsed = time.monotonic() - cycle_start
+                sleep_duration = max(1.0, self.state["interval"] - elapsed)
+                await asyncio.sleep(sleep_duration)
         except asyncio.CancelledError:
             pass
 
+    @commands.Cog.listener()
+    async def on_ready(self):
+        if self._initialized:
+            return
+        self._initialized = True
+
+        # Clean up any leftover widgets from before the bot restarted
+        async with self._lock:
+            if self.state.get("messages"):
+                print("[AutoMessage] Cleaning up old widget messages from previous session...")
+                await self.delete_all_tracked_messages()
+
+        # If AutoMessage was active before the restart, resume the synced loop automatically
+        if self.state.get("active") and self.state.get("session"):
+            if not self.master_task or self.master_task.done():
+                self.master_task = asyncio.create_task(self.run_master_loop())
+                print(f"[AutoMessage] Resumed synced loop for '{self.state['session']}'.")
+
+    # --- COMMANDS ---
     @commands.command(name="automessagesetup", aliases=["amsetup"])
     @commands.has_permissions(manage_messages=True)
     async def automessage_setup(self, ctx, time_interval: str, *, session: str):
@@ -111,33 +216,31 @@ class AutoMessage(commands.Cog):
                 description=f"{self.cross} **Please provide a valid time interval greater than 10 seconds** (e.g., `1h`, `30m`).",
                 color=discord.Color.red()
             )
-            await ctx.send(embed=embed)
-            return
+            return await ctx.send(embed=embed)
 
-        # Cancel any active tasks before starting a new setup cycle
-        for channel_id, data in list(self.active_channels.items()):
-            task = data.get("task")
-            if task and not task.done():
-                task.cancel()
-        self.active_channels.clear()
+        # Cancel existing master loop if running
+        if self.master_task and not self.master_task.done():
+            self.master_task.cancel()
+            try:
+                await self.master_task
+            except asyncio.CancelledError:
+                pass
 
-        # Start background loop for all designated channels
-        count = 0
-        for channel_id in TARGET_CHANNELS:
-            self.active_channels[channel_id] = {
-                "interval": seconds,
-                "session": session,
-                "last_message": None,
-                "task": None
-            }
-            task = asyncio.create_task(self.run_automessage_loop(channel_id))
-            self.active_channels[channel_id]["task"] = task
-            count += 1
+        # Delete any previous widgets before starting the fresh cycle
+        async with self._lock:
+            await self.delete_all_tracked_messages()
+            self.state["active"] = True
+            self.state["interval"] = seconds
+            self.state["time_str"] = time_interval
+            self.state["session"] = session
+            self._save_state()
+
+        self.master_task = asyncio.create_task(self.run_master_loop())
 
         embed = discord.Embed(
             description=(
                 f"{self.tick} **Auto-messages configured for \"{session}\"!**\n"
-                f"Now active across **{count} target channels** reposting every **{time_interval}**."
+                f"Now active and synced across **{len(TARGET_CHANNELS)} target channels** reposting every **{time_interval}**."
             ),
             color=discord.Color.green()
         )
@@ -146,25 +249,28 @@ class AutoMessage(commands.Cog):
     @commands.command(name="automessagestop", aliases=["amstop"])
     @commands.has_permissions(manage_messages=True)
     async def automessage_stop(self, ctx):
-        """Stops auto-messages across all channels."""
-        if not self.active_channels:
+        """Stops auto-messages across all channels and deletes the active widgets."""
+        if not self.state.get("active") and not self.state.get("messages"):
             embed = discord.Embed(
                 description=f"{self.cross} **There are no active auto-message loops running.**",
                 color=discord.Color.red()
             )
-            await ctx.send(embed=embed)
-            return
+            return await ctx.send(embed=embed)
 
-        count = len(self.active_channels)
-        for channel_id, data in list(self.active_channels.items()):
-            task = data.get("task")
-            if task and not task.done():
-                task.cancel()
+        if self.master_task and not self.master_task.done():
+            self.master_task.cancel()
+            try:
+                await self.master_task
+            except asyncio.CancelledError:
+                pass
 
-        self.active_channels.clear()
+        async with self._lock:
+            self.state["active"] = False
+            await self.delete_all_tracked_messages()
+            self._save_state()
 
         embed = discord.Embed(
-            description=f"🛑 **Auto-message loops stopped across all {count} target channels.**",
+            description=f"🛑 **Auto-message loops stopped and all active widgets deleted across {len(TARGET_CHANNELS)} target channels.**",
             color=discord.Color.gold()
         )
         await ctx.send(embed=embed)
@@ -177,6 +283,7 @@ class AutoMessage(commands.Cog):
                 color=discord.Color.red()
             )
             await ctx.send(embed=embed)
+
 
 async def setup(bot):
     await bot.add_cog(AutoMessage(bot))
