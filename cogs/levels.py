@@ -30,11 +30,6 @@ cursor.execute("""CREATE TABLE IF NOT EXISTS levels (
 )""")
 database.commit()
 
-# --- HELPER FUNCTION TO SAFELY LOAD BUNDLED FONTS ---
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-# Go up one level from 'cogs' to reach the main project root
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 def load_font(filename, size):
     """Attempts to load a bundled font from the 'fonts' directory."""
@@ -67,7 +62,7 @@ class Leveling(commands.Cog):
         result = cursor.fetchone()
         
         if result is None:
-            initial_exp = (15*1.25) if message.author.premium_since is not None else 10
+            initial_exp = (15 * 1.25) if message.author.premium_since is not None else 10
             
             cursor.execute(
                 "INSERT INTO levels (user_id, guild_id, exp, level, last_lvl) VALUES(?, ?, ?, 0, 0)",
@@ -118,9 +113,9 @@ class Leveling(commands.Cog):
                             )
                             await channel.send(embed=embed)
                         except discord.Forbidden:
-                            print(f"[Leveling Error] Bot missing permissions to manage roles or role is higher than the bot's hierarchy.")
+                            print("[Leveling Error] Bot missing permissions to manage roles or role is higher than the bot's hierarchy.")
                         except discord.HTTPException:
-                            print(f"[Leveling Error] Failed to update roles due to a network or API issue.")
+                            print("[Leveling Error] Failed to update roles due to a network or API issue.")
     
     @commands.command(name="level", aliases=["rank"], description="Check your level or someone else's level")
     async def level(self, ctx, member: discord.Member = None):
@@ -177,16 +172,24 @@ class Leveling(commands.Cog):
         draw = ImageDraw.Draw(base_card)
         username = f"@{target.name}"
         
-        # --- LOAD BUNDLED FONTS ---
-        font_username = load_font("Arial-Bold.TTF", 35)
-        font_metrics = load_font("Arial.TTF", 25)
+        # --- LOAD & DYNAMICALLY FIT USERNAME FONT ---
+        max_name_width = base_card.width - 175
+        font_size = 35
+        font_username = load_font("Arial-Bold.TTF", font_size)
 
-        if len(username) > 15:
-            font_username_scaled = load_font("Arial-Bold.TTF", 100)
-            draw.text((150, 27), username, fill=(255, 255, 255, 255), font=font_username_scaled)
-        else:
-            draw.text((150, 27), username, fill=(255, 255, 255, 255), font=font_username)
+        # Shrink font size smoothly down to 22 if the username is wide
+        while draw.textlength(username, font=font_username) > max_name_width and font_size > 22:
+            font_size -= 1
+            font_username = load_font("Arial-Bold.TTF", font_size)
+
+        # If still wider than the card at size 22, truncate cleanly with "..."
+        while draw.textlength(username, font=font_username) > max_name_width and len(username) > 4:
+            username = username[:-4] + "..."
+
+        name_y = 27 + (35 - font_size) // 2
+        draw.text((150, name_y), username, fill=(255, 255, 255, 255), font=font_username)
         
+        font_metrics = load_font("Arial.TTF", 25)
         draw.text((155, 100), f"Level: {level}", fill=(255, 255, 255, 255), font=font_metrics)
         draw.text((270, 100), f"XP: {current_level_xp}/{xp_needed_for_this_tier}", fill=(200, 200, 200, 255), font=font_metrics)
         draw.text((444, 100), f"Rank: #{rank}", fill=(255, 215, 0, 255), font=font_metrics)
