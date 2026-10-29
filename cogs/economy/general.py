@@ -345,9 +345,22 @@ class EconomyGeneral(commands.Cog):
     @commands.command(name="richest")
     @not_in_thread()
     async def richest(self, ctx):
-        """View the richest users in the server."""
+        """View the top 10 richest active members in the server."""
         try:
-            leaderboard = await EconomyDB.get_leaderboard(10)
+            if ctx.guild and not ctx.guild.chunked:
+                await ctx.guild.chunk()
+
+            # Pass -1 so SQLite returns all rows sorted by total_nodes DESC, then filter to active server members
+            all_rows = await EconomyDB.get_leaderboard(-1)
+
+            leaderboard = []
+            for user_id, total_nodes in all_rows:
+                member = ctx.guild.get_member(user_id) if ctx.guild else None
+                if member is not None and not member.bot:
+                    leaderboard.append((member, total_nodes))
+                    if len(leaderboard) == 10:
+                        break
+
             if not leaderboard:
                 embed = discord.Embed(
                     title="🏆 Server Top Node Mainframes",
@@ -369,28 +382,16 @@ class EconomyGeneral(commands.Cog):
             )
 
             description = ""
-            for index, (user_id, total_nodes) in enumerate(
+            for index, (member, total_nodes) in enumerate(
                 leaderboard, start=1
             ):
-                user = self.bot.get_user(user_id)
-
-                if user is None:
-                    try:
-                        user = await self.bot.fetch_user(user_id)
-                    except discord.NotFound:
-                        user = None
-
-                user_name = (
-                    user.mention if user else f"Unknown User (`{user_id}`)"
-                )
-
                 medal = (
                     "🥇"
                     if index == 1
                     else "🥈" if index == 2 else "🥉" if index == 3 else f"`#{index}`"
                 )
                 description += (
-                    f"{medal} {user_name} — `{total_nodes:,.0f}` Nodes\n"
+                    f"{medal} {member.mention} — `{total_nodes:,.0f}` Nodes\n"
                 )
 
             embed.description = description
@@ -517,9 +518,19 @@ class EconomyGeneral(commands.Cog):
                 )
                 return await ctx.send(embed=embed)
 
-            # 5. Check if sender is in the top 3 on the richest leaderboard
-            leaderboard = await EconomyDB.get_leaderboard(3)
-            top_3_ids = [user_id for user_id, _ in leaderboard] if leaderboard else []
+            # 5. Check if sender is in the top 3 active server members on the richest leaderboard
+            if ctx.guild and not ctx.guild.chunked:
+                await ctx.guild.chunk()
+
+            all_rows = await EconomyDB.get_leaderboard(-1)
+            top_3_ids = []
+            for user_id, _ in all_rows:
+                member = ctx.guild.get_member(user_id) if ctx.guild else None
+                if member is not None and not member.bot:
+                    top_3_ids.append(user_id)
+                    if len(top_3_ids) == 3:
+                        break
+
             is_top_3 = ctx.author.id in top_3_ids
 
             # 6. Calculate tax (15% for amounts > 10,000, 0% if sender is in top 3)

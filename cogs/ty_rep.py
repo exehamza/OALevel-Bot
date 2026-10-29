@@ -69,11 +69,23 @@ class RepCog(commands.Cog):
 
     @commands.command(name="replb", aliases=["repleaderboard", "lbrep"])
     async def rep_leaderboard(self, ctx):
-        """Displays the top 10 members with the most reputation."""
+        """Displays the top 10 active server members with the most reputation."""
+        if not ctx.guild.chunked:
+            await ctx.guild.chunk()
+
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT user_id, rep_count FROM user_rep ORDER BY rep_count DESC LIMIT 10")
-            top_users = cursor.fetchall()
+            cursor.execute("SELECT user_id, rep_count FROM user_rep WHERE rep_count > 0 ORDER BY rep_count DESC")
+            all_users = cursor.fetchall()
+
+        # Filter to only the top 10 members currently in the server (preserving DB data for departed users)
+        top_users = []
+        for user_id, rep_count in all_users:
+            member = ctx.guild.get_member(user_id)
+            if member is not None and not member.bot:
+                top_users.append((member, rep_count))
+                if len(top_users) == 10:
+                    break
 
         if not top_users:
             embed = discord.Embed(
@@ -86,16 +98,9 @@ class RepCog(commands.Cog):
         leaderboard_text = ""
         medals = {1: "🥇", 2: "🥈", 3: "🥉"}
 
-        for index, (user_id, rep_count) in enumerate(top_users, start=1):
+        for index, (member, rep_count) in enumerate(top_users, start=1):
             emoji = medals.get(index, "🔹")
-            
-            member = ctx.guild.get_member(user_id)
-            if member:
-                user_string = member.mention
-            else:
-                user_string = f"User ID: {user_id}"
-
-            leaderboard_text += f"{emoji} **#{index}** | {user_string} — **{rep_count}** Rep\n"
+            leaderboard_text += f"{emoji} **#{index}** | {member.mention} — **{rep_count}** Rep\n"
 
         embed = discord.Embed(
             title="🏆 Reputation Leaderboard",
@@ -129,7 +134,6 @@ class RepCog(commands.Cog):
                 cursor.execute("INSERT INTO user_rep (user_id, rep_count) VALUES (?, ?)", (member.id, amount))
             conn.commit()
 
-        # FIXED: Using self.tick correctly here
         embed = discord.Embed(
             description=f"{self.tick} Successfully set {member.mention}'s reputation to **{amount}**.",
             color=0x2ecc71
@@ -139,8 +143,6 @@ class RepCog(commands.Cog):
     @set_rep.error
     async def set_rep_error(self, ctx, error):
         color_err = 0xe74c3c
-        
-        # Local fallback string just in case self.cross fails
         cross_icon = getattr(self, "cross", "❌")
         
         if isinstance(error, commands.MissingPermissions):
