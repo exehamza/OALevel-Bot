@@ -128,14 +128,21 @@ class Leveling(commands.Cog):
             )
             return await ctx.send(embed=embed)
 
+        if not ctx.guild.chunked:
+            await ctx.guild.chunk()
+
+        # Only count members currently in the server when computing rank
         rank = 1
         cursor.execute("SELECT user_id FROM levels WHERE guild_id = ? ORDER BY exp DESC", (ctx.guild.id,))
         result = cursor.fetchall()
         
-        for i in range(len(result)):
-            if result[i][0] == target.id:
+        for row in result:
+            uid = row[0]
+            if uid == target.id:
                 break
-            rank += 1
+            m = ctx.guild.get_member(uid)
+            if m is not None and not m.bot:
+                rank += 1
             
         cursor.execute(
             "SELECT exp, level FROM levels WHERE user_id = ? AND guild_id = ?",
@@ -241,11 +248,23 @@ class Leveling(commands.Cog):
 
     @commands.command(name="leaderboard", aliases=["lb"], description="Display the top server members")
     async def leaderboard(self, ctx):
+        if not ctx.guild.chunked:
+            await ctx.guild.chunk()
+
         cursor.execute(
-            "SELECT user_id, level, exp FROM levels WHERE guild_id = ? ORDER BY exp DESC LIMIT 10",
+            "SELECT user_id, level, exp FROM levels WHERE guild_id = ? ORDER BY exp DESC",
             (ctx.guild.id,)
         )
-        top_entries = cursor.fetchall()
+        all_entries = cursor.fetchall()
+
+        # Filter to only the top 10 users who are currently in the server (preserving DB data for departed users)
+        top_entries = []
+        for user_id, level, exp in all_entries:
+            member = ctx.guild.get_member(user_id)
+            if member is not None and not member.bot:
+                top_entries.append((member, level, exp))
+                if len(top_entries) == 10:
+                    break
 
         if not top_entries:
             embed = discord.Embed(
@@ -271,7 +290,7 @@ class Leveling(commands.Cog):
 
         async with aiohttp.ClientSession() as session:
             for index, entry in enumerate(top_entries):
-                user_id, level, exp = entry
+                member, level, exp = entry
                 rank_num = index + 1
 
                 try:
@@ -288,9 +307,7 @@ class Leveling(commands.Cog):
                 rank_color = rank_colors[index] if index < 3 else (200, 200, 200, 255)
                 draw.text((X_RANK, CENTER_Y - 16), rank_text, fill=rank_color, font=font_rank)
 
-                member = ctx.guild.get_member(user_id)
-                display_name = f"@{member.name}" if member else f"User_{str(user_id)[-4:]}"
-
+                display_name = f"@{member.name}"
                 if len(display_name) > 18:
                     display_name = display_name[:15] + "..."
                 draw.text((X_NAME, CENTER_Y - 14), display_name, fill=(255, 255, 255, 255), font=font_name)
@@ -302,22 +319,21 @@ class Leveling(commands.Cog):
                 avatar_y = CENTER_Y - (avatar_size[1] // 2)
                 avatar_pasted = False
 
-                if member:
-                    try:
-                        async with session.get(member.display_avatar.url) as response:
-                            if response.status == 200:
-                                av_bytes = await response.read()
-                                avatar_img = Image.open(io.BytesIO(av_bytes)).convert("RGBA")
-                                resized_avatar = avatar_img.resize(avatar_size, Image.Resampling.LANCZOS)
-                                
-                                mask = Image.new("L", avatar_size, 0)
-                                mask_draw = ImageDraw.Draw(mask)
-                                mask_draw.ellipse((0, 0) + avatar_size, fill=255)
-                                
-                                row_card.paste(resized_avatar, (X_AVATAR, avatar_y), mask=mask)
-                                avatar_pasted = True
-                    except Exception:
-                        pass
+                try:
+                    async with session.get(member.display_avatar.url) as response:
+                        if response.status == 200:
+                            av_bytes = await response.read()
+                            avatar_img = Image.open(io.BytesIO(av_bytes)).convert("RGBA")
+                            resized_avatar = avatar_img.resize(avatar_size, Image.Resampling.LANCZOS)
+                            
+                            mask = Image.new("L", avatar_size, 0)
+                            mask_draw = ImageDraw.Draw(mask)
+                            mask_draw.ellipse((0, 0) + avatar_size, fill=255)
+                            
+                            row_card.paste(resized_avatar, (X_AVATAR, avatar_y), mask=mask)
+                            avatar_pasted = True
+                except Exception:
+                    pass
 
                 if not avatar_pasted:
                     draw.ellipse([X_AVATAR, avatar_y, X_AVATAR + 50, avatar_y + 50], fill=(120, 125, 135, 255))
