@@ -1,22 +1,5 @@
 """
-AutoLogger - Dyno-style message edit/delete and member join/leave logger for discord.py.
-
-Drop this file into your bot's ``cogs/`` folder and load it with:
-
-    await bot.load_extension("cogs.autologger")
-
-Requirements
-------------
-* discord.py >= 2.0
-* Intents: ``message_content`` and ``members`` (both privileged - enable them in
-  the Developer Portal) on top of the default intents, e.g.:
-
-      intents = discord.Intents.default()
-      intents.message_content = True
-      intents.members = True
-
-* Bot permissions in the log channel: View Channel, Send Messages,
-  Embed Links, Attach Files.
+AutoLogger - Dyno-style message edit/delete, member join/leave, role, and channel logger.
 """
 from __future__ import annotations
 
@@ -28,11 +11,12 @@ import shutil
 import tempfile
 import time
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
-from typing import Awaitable, Callable, Optional, Set
+from typing import Awaitable, Callable, List, Optional, Set
 
+import aiohttp
 import discord
 from discord.ext import commands
 
@@ -45,25 +29,22 @@ log = logging.getLogger(__name__)
 LOG_CHANNEL_ID = 1296530025637740554
 IGNORED_CHANNEL_IDS = {LOG_CHANNEL_ID, 1324373003680743503}
 
-DELETE_COLOR = discord.Colour(0xED4245)  # red
-EDIT_COLOR = discord.Colour(0x3880D4)  # blue
-JOIN_COLOR = discord.Colour(0x43B581)  # green
-LEAVE_COLOR = discord.Colour(0xFF4500)  # orange-red
+DELETE_COLOR = discord.Colour(0xFF4500)  # Dyno orange-red
+EDIT_COLOR = discord.Colour(0x3880D4)    # Dyno blue
+JOIN_COLOR = discord.Colour(0x43B581)    # Dyno green
+LEAVE_COLOR = discord.Colour(0xFF4500)   # Dyno orange-red
 
 CACHE_MAX_ENTRIES = 1000
-SEGMENT_MAX = 1024  # per-segment cap (before/after) - keeps the description well under 4096
+SEGMENT_MAX = 1024
 
-# Images are downloaded when the message is sent so they can be re-uploaded
-# if the message is deleted (the CDN link may not survive the deletion).
-# Keep this under your server's upload limit (10 MB is the safe default).
-MAX_IMAGE_DOWNLOAD_BYTES = 8 * 1024 * 1024
+MAX_IMAGE_DOWNLOAD_BYTES = 20 * 1024 * 1024  # 20 MB
 IMAGE_TMP_DIR = Path(tempfile.gettempdir()) / "autologger-images"
 IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif", ".webp")
 
 IGNORE_BOTS = True
 
 # --------------------------------------------------------------------------
-# Helpers
+# Helpers & Views
 # --------------------------------------------------------------------------
 
 
@@ -76,8 +57,7 @@ def truncate(value: str, limit: int = SEGMENT_MAX) -> str:
 
 
 def format_age(delta: timedelta) -> str:
-    """Human-readable duration using the two largest non-zero units,
-    e.g. ``14 mins, 43 secs`` or ``3 years, 2 months``."""
+    """Human-readable duration down to hrs, mins, secs."""
     seconds = max(int(delta.total_seconds()), 0)
     units = (
         ("year", 365 * 86400),
@@ -95,6 +75,18 @@ def format_age(delta: timedelta) -> str:
     return ", ".join(parts) or "0 secs"
 
 
+def format_channel_type(channel: discord.abc.GuildChannel) -> str:
+    mapping = {
+        discord.ChannelType.text: "Text Channel",
+        discord.ChannelType.voice: "Voice Channel",
+        discord.ChannelType.category: "Category",
+        discord.ChannelType.news: "Announcement Channel",
+        discord.ChannelType.stage_voice: "Stage Channel",
+        discord.ChannelType.forum: "Forum Channel",
+    }
+    return mapping.get(getattr(channel, "type", None), "Channel")
+
+
 def remove_file(path: Optional[Path]) -> None:
     if path is None:
         return
@@ -102,6 +94,36 @@ def remove_file(path: Optional[Path]) -> None:
         path.unlink(missing_ok=True)
     except OSError as exc:
         log.debug("AutoLogger: could not remove tmp file %s: %s", path, exc)
+
+
+class MessageLogView(discord.ui.View):
+    """Dyno-style action row with 'Get User ID' and 'Jump to Context/Message'."""
+
+    def __init__(self, user_id: int, jump_url: str, *, is_edit: bool) -> None:
+        super().__init__(timeout=None)
+        # Handled persistently via Cog's on_interaction listener using custom_id
+        self.add_item(
+            discord.ui.Button(
+                label="Get User ID",
+                style=discord.ButtonStyle.secondary,
+                custom_id=f"autologger:userid:{user_id}",
+            )
+        )
+        self.add_item(
+            discord.ui.Button(
+                label="Jump to Message" if is_edit else "Jump to Context",
+                style=discord.ButtonStyle.link,
+                url=jump_url,
+            )
+        )
+
+
+@dataclass
+class CachedImage:
+    url: str
+    proxy_url: str
+    filename: str
+    path: Optional[Path] = None
 
 
 @dataclass
@@ -113,13 +135,12 @@ class CachedMessage:
     author_id: int
     author_name: str
     content: str
-    image_url: Optional[str] = None
-    image_filename: Optional[str] = None
-    image_path: Optional[Path] = None
+    images: List[CachedImage] = field(default_factory=list)
+    download_task: Optional["asyncio.Task[None]"] = None
 
 
 class MessageCache:
-    """Tiny in-memory LRU cache built on OrderedDict."""
+    """In-memory LRU cache built on OrderedDict."""
 
     def __init__(
         self,
@@ -134,7 +155,6 @@ class MessageCache:
         return len(self._data)
 
     def peek(self, key: int) -> Optional[CachedMessage]:
-        """Look up an entry without refreshing its recency."""
         return self._data.get(key)
 
     def get(self, key: int) -> Optional[CachedMessage]:
@@ -152,7 +172,6 @@ class MessageCache:
                 self._on_evict(evicted)
 
     def pop(self, key: int) -> Optional[CachedMessage]:
-        """Remove and return an entry. The caller owns any cleanup."""
         return self._data.pop(key, None)
 
     def clear(self) -> None:
@@ -169,12 +188,7 @@ class MessageCache:
 
 
 class AutoLogger(commands.Cog):
-    """Logs message edits and deletions to a single channel, Dyno-style.
-
-    Uses the raw gateway events with its own cache as the source of truth, so
-    it keeps working for messages that have dropped out of discord.py's
-    internal message cache.
-    """
+    """Logs message edits/deletes, member joins/leaves, role updates, and channel changes."""
 
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
@@ -194,14 +208,35 @@ class AutoLogger(commands.Cog):
         self._cache.clear()
         shutil.rmtree(IMAGE_TMP_DIR, ignore_errors=True)
 
-    # ---- caching ---------------------------------------------------------
+    # ---- persistent button handler ---------------------------------------
+
+    @commands.Cog.listener()
+    async def on_interaction(self, interaction: discord.Interaction) -> None:
+        if interaction.type != discord.InteractionType.component:
+            return
+        custom_id = (interaction.data or {}).get("custom_id", "")
+        if custom_id.startswith("autologger:userid:"):
+            user_id = custom_id.split("autologger:userid:", 1)[1]
+            if not interaction.response.is_done():
+                await interaction.response.send_message(user_id, ephemeral=True)
+
+    # ---- caching & image pre-fetching ------------------------------------
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
         if not self._should_track(message):
             return
 
-        image = self._first_image(message)
+        attachments = self._extract_images(message)
+        cached_images = [
+            CachedImage(
+                url=att.url,
+                proxy_url=att.proxy_url,
+                filename= re.sub(r"[^a-zA-Z0-9._-]", "_", att.filename) or f"image_{idx}.png",
+            )
+            for idx, att in enumerate(attachments)
+        ]
+
         entry = CachedMessage(
             message_id=message.id,
             channel_id=message.channel.id,
@@ -210,12 +245,13 @@ class AutoLogger(commands.Cog):
             author_id=message.author.id,
             author_name=message.author.name,
             content=message.content,
-            image_url=image.url if image else None,
+            images=cached_images,
         )
         self._cache.set(message.id, entry)
 
-        if image is not None and 0 < image.size <= MAX_IMAGE_DOWNLOAD_BYTES:
-            self._spawn(self._download_image(entry, image))
+        if attachments:
+            task = self._spawn(self._download_images(entry, attachments))
+            entry.download_task = task
 
     def _should_track(self, message: discord.Message) -> bool:
         if message.guild is None:
@@ -226,57 +262,82 @@ class AutoLogger(commands.Cog):
             return False
         if IGNORE_BOTS and message.author.bot:
             return False
-
         return self._is_log_guild(message.guild.id)
 
     def _is_log_guild(self, guild_id: int) -> bool:
-        """If the log channel lives in a specific server, only log that server."""
         log_channel = self.bot.get_channel(LOG_CHANNEL_ID)
         log_guild = getattr(log_channel, "guild", None)
         return log_guild is None or log_guild.id == guild_id
 
     @staticmethod
-    def _first_image(message: discord.Message) -> Optional[discord.Attachment]:
+    def _extract_images(message: discord.Message) -> List[discord.Attachment]:
+        found: List[discord.Attachment] = []
         for attachment in message.attachments:
-            if (attachment.content_type or "").startswith("image/"):
-                return attachment
-            if attachment.filename.lower().endswith(IMAGE_EXTENSIONS):
-                return attachment
-        return None
+            ctype = (attachment.content_type or "").lower()
+            fname = attachment.filename.lower().split("?")[0]
+            if ctype.startswith("image/") or fname.endswith(IMAGE_EXTENSIONS):
+                if 0 < attachment.size <= MAX_IMAGE_DOWNLOAD_BYTES:
+                    found.append(attachment)
+        return found
 
-    def _spawn(self, coro: Awaitable[None]) -> None:
+    def _spawn(self, coro: Awaitable[None]) -> "asyncio.Task[None]":
         task = asyncio.ensure_future(coro)
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
+        return task
 
-    async def _download_image(self, entry: CachedMessage, attachment: discord.Attachment) -> None:
-        try:
-            data = await attachment.read()
-        except discord.DiscordException as exc:
-            log.warning("AutoLogger: failed to pre-fetch image for message %s: %s", entry.message_id, exc)
-            return
-        if len(data) > MAX_IMAGE_DOWNLOAD_BYTES:
-            return
+    async def _download_images(
+        self,
+        entry: CachedMessage,
+        attachments: List[discord.Attachment],
+    ) -> None:
+        for idx, attachment in enumerate(attachments):
+            if idx >= len(entry.images):
+                break
+            img_meta = entry.images[idx]
+            data: Optional[bytes] = None
 
-        safe_name = re.sub(r"[^a-zA-Z0-9._-]", "_", attachment.filename)
-        dest = IMAGE_TMP_DIR / f"{entry.message_id}-{safe_name}"
-        try:
-            IMAGE_TMP_DIR.mkdir(parents=True, exist_ok=True)
-            await asyncio.get_running_loop().run_in_executor(None, dest.write_bytes, data)
-        except OSError as exc:
-            log.warning("AutoLogger: failed to write tmp image for message %s: %s", entry.message_id, exc)
-            return
+            # 1. Try Discord media proxy cache first, then direct CDN
+            for use_cached in (True, False):
+                try:
+                    data = await attachment.read(use_cached=use_cached)
+                    if data:
+                        break
+                except discord.DiscordException:
+                    continue
 
-        # The message may have been deleted/evicted while we were downloading.
-        if self._cache.peek(entry.message_id) is entry:
-            entry.image_path = dest
-            entry.image_filename = safe_name
-        else:
-            remove_file(dest)
+            if not data or len(data) > MAX_IMAGE_DOWNLOAD_BYTES:
+                continue
+
+            dest = IMAGE_TMP_DIR / f"{entry.message_id}-{idx}-{img_meta.filename}"
+            try:
+                IMAGE_TMP_DIR.mkdir(parents=True, exist_ok=True)
+                await asyncio.get_running_loop().run_in_executor(None, dest.write_bytes, data)
+                img_meta.path = dest
+            except OSError as exc:
+                log.warning("AutoLogger: failed to write tmp image for message %s: %s", entry.message_id, exc)
+
+    async def _fetch_fallback_bytes(self, img_meta: CachedImage) -> Optional[bytes]:
+        """If pre-download missed or was cleared, try fetching from proxy_url or url."""
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; Discordbot/2.0)"}
+        async with aiohttp.ClientSession(headers=headers) as session:
+            for target_url in (img_meta.proxy_url, img_meta.url):
+                if not target_url:
+                    continue
+                try:
+                    async with session.get(target_url, timeout=aiohttp.ClientTimeout(total=8)) as resp:
+                        if resp.status == 200:
+                            data = await resp.read()
+                            if data and len(data) <= MAX_IMAGE_DOWNLOAD_BYTES:
+                                return data
+                except Exception:
+                    continue
+        return None
 
     @staticmethod
     def _discard_entry(entry: CachedMessage) -> None:
-        remove_file(entry.image_path)
+        for img in entry.images:
+            remove_file(img.path)
 
     # ---- edits -----------------------------------------------------------
 
@@ -285,8 +346,6 @@ class AutoLogger(commands.Cog):
         if payload.guild_id is None or payload.channel_id in IGNORED_CHANNEL_IDS:
             return
 
-        # Updates that don't touch the text (link embeds loading, pins, ...)
-        # either omit "content" or leave it unchanged.
         after = payload.data.get("content")
         if after is None:
             return
@@ -299,18 +358,18 @@ class AutoLogger(commands.Cog):
         if before == after:
             return
 
-        # Refresh the cache so a second edit still has an accurate "before".
         entry.content = after
+        jump_url = f"https://discord.com/channels/{entry.guild_id}/{entry.channel_id}/{entry.message_id}"
 
-        await self._send(
-            self._build_embed(
-                title="Message Edited",
-                color=EDIT_COLOR,
-                entry=entry,
-                before=before,
-                after=after,
-            )
+        embed = self._build_embed(
+            title="Message Edited",
+            color=EDIT_COLOR,
+            entry=entry,
+            before=before,
+            after=after,
         )
+        view = MessageLogView(user_id=entry.author_id, jump_url=jump_url, is_edit=True)
+        await self._send(embed, view=view)
 
     # ---- deletes ---------------------------------------------------------
 
@@ -323,16 +382,28 @@ class AutoLogger(commands.Cog):
         if entry is None:
             return
 
-        file: Optional[discord.File] = None
-        if entry.image_path is not None:
+        # If the image download is still running (e.g. fast delete), wait for it to finish!
+        if entry.download_task is not None and not entry.download_task.done():
             try:
-                data = await asyncio.get_running_loop().run_in_executor(None, entry.image_path.read_bytes)
-                file = discord.File(
-                    io.BytesIO(data),
-                    filename=entry.image_filename or entry.image_path.name,
-                )
-            except OSError as exc:
-                log.warning("AutoLogger: failed to read tmp image for message %s: %s", entry.message_id, exc)
+                await asyncio.wait_for(asyncio.shield(entry.download_task), timeout=8.0)
+            except (asyncio.TimeoutError, Exception):
+                pass
+
+        files: List[discord.File] = []
+        for img_meta in entry.images:
+            data: Optional[bytes] = None
+            if img_meta.path is not None and img_meta.path.exists():
+                try:
+                    data = await asyncio.get_running_loop().run_in_executor(None, img_meta.path.read_bytes)
+                except OSError as exc:
+                    log.warning("AutoLogger: failed to read tmp image for message %s: %s", entry.message_id, exc)
+
+            # Live fallback if file was missing
+            if not data:
+                data = await self._fetch_fallback_bytes(img_meta)
+
+            if data:
+                files.append(discord.File(io.BytesIO(data), filename=img_meta.filename))
 
         embed = self._build_embed(
             title="Message Deleted",
@@ -340,24 +411,25 @@ class AutoLogger(commands.Cog):
             entry=entry,
             before=entry.content,
         )
-        if file is not None:
-            embed.set_image(url=f"attachment://{file.filename}")
-        elif entry.image_url:
-            embed.set_image(url=entry.image_url)
+        if files:
+            embed.set_image(url=f"attachment://{files[0].filename}")
+        elif entry.images:
+            embed.set_image(url=entry.images[0].proxy_url or entry.images[0].url)
+
+        jump_url = f"https://discord.com/channels/{entry.guild_id}/{entry.channel_id}/{entry.message_id}"
+        view = MessageLogView(user_id=entry.author_id, jump_url=jump_url, is_edit=False)
 
         try:
-            await self._send(embed, file)
+            await self._send(embed, files=files, view=view)
         finally:
-            remove_file(entry.image_path)
+            self._discard_entry(entry)
 
     @commands.Cog.listener()
     async def on_raw_bulk_message_delete(self, payload: discord.RawBulkMessageDeleteEvent) -> None:
-        # Not logged individually (a purge would flood the log channel), but
-        # purge the cache so tmp images don't linger.
         for message_id in payload.message_ids:
             entry = self._cache.pop(message_id)
             if entry is not None:
-                remove_file(entry.image_path)
+                self._discard_entry(entry)
 
     # ---- member joins / leaves -------------------------------------------
 
@@ -378,7 +450,6 @@ class AutoLogger(commands.Cog):
 
     @commands.Cog.listener()
     async def on_raw_member_remove(self, payload: discord.RawMemberRemoveEvent) -> None:
-        # Raw event: fires even when the member isn't in discord.py's cache.
         if not self._is_log_guild(payload.guild_id):
             return
 
@@ -392,7 +463,143 @@ class AutoLogger(commands.Cog):
             )
         )
 
-    # ---- embed builder (Dyno-style layout) -------------------------------
+    # ---- role given / role removed (Dyno style) --------------------------
+
+    @commands.Cog.listener()
+    async def on_member_update(self, before: discord.Member, after: discord.Member) -> None:
+        if not self._is_log_guild(after.guild.id):
+            return
+
+        if before.roles == after.roles:
+            return
+
+        before_set = set(before.roles)
+        after_set = set(after.roles)
+
+        added_roles = [r for r in after.roles if r not in before_set and not r.is_default()]
+        removed_roles = [r for r in before.roles if r not in after_set and not r.is_default()]
+
+        avatar_url = after.display_avatar.url
+
+        if added_roles:
+            label = "role" if len(added_roles) == 1 else "roles"
+            roles_str = " , ".join(f"`{r.name}`" for r in added_roles)
+            embed = discord.Embed(
+                description=f"<@{after.id}> **was given the {label}** {roles_str}",
+                colour=EDIT_COLOR,
+                timestamp=discord.utils.utcnow(),
+            )
+            embed.set_author(name=after.name, icon_url=avatar_url)
+            embed.set_footer(text=f"ID: {after.id}")
+            await self._send(embed)
+
+        if removed_roles:
+            label = "role" if len(removed_roles) == 1 else "roles"
+            roles_str = " , ".join(f"`{r.name}`" for r in removed_roles)
+            embed = discord.Embed(
+                description=f"<@{after.id}> **was removed from the {label}** {roles_str}",
+                colour=LEAVE_COLOR,
+                timestamp=discord.utils.utcnow(),
+            )
+            embed.set_author(name=after.name, icon_url=avatar_url)
+            embed.set_footer(text=f"ID: {after.id}")
+            await self._send(embed)
+
+    # ---- channel created / deleted / updated (Dyno style) ----------------
+
+    @commands.Cog.listener()
+    async def on_guild_channel_create(self, channel: discord.abc.GuildChannel) -> None:
+        if not self._is_log_guild(channel.guild.id):
+            return
+
+        ch_type = format_channel_type(channel)
+        lines = [
+            f"**{ch_type} Created: #{channel.name}**",
+            f"**Channel:** <#{channel.id}>",
+        ]
+        if getattr(channel, "category", None):
+            lines.append(f"**Category:** {channel.category.name}")
+
+        embed = discord.Embed(
+            description="\n".join(lines),
+            colour=JOIN_COLOR,
+            timestamp=discord.utils.utcnow(),
+        )
+        icon_url = channel.guild.icon.url if channel.guild.icon else None
+        embed.set_author(name=channel.guild.name, icon_url=icon_url)
+        embed.set_footer(text=f"ID: {channel.id}")
+        await self._send(embed)
+
+    @commands.Cog.listener()
+    async def on_guild_channel_delete(self, channel: discord.abc.GuildChannel) -> None:
+        if not self._is_log_guild(channel.guild.id):
+            return
+
+        ch_type = format_channel_type(channel)
+        lines = [f"**{ch_type} Deleted: #{channel.name}**"]
+        if getattr(channel, "category", None):
+            lines.append(f"**Category:** {channel.category.name}")
+
+        embed = discord.Embed(
+            description="\n".join(lines),
+            colour=LEAVE_COLOR,
+            timestamp=discord.utils.utcnow(),
+        )
+        icon_url = channel.guild.icon.url if channel.guild.icon else None
+        embed.set_author(name=channel.guild.name, icon_url=icon_url)
+        embed.set_footer(text=f"ID: {channel.id}")
+        await self._send(embed)
+
+    @commands.Cog.listener()
+    async def on_guild_channel_update(
+        self,
+        before: discord.abc.GuildChannel,
+        after: discord.abc.GuildChannel,
+    ) -> None:
+        if not self._is_log_guild(after.guild.id) or after.id in IGNORED_CHANNEL_IDS:
+            return
+
+        changes: List[tuple[str, str]] = []
+
+        if before.name != after.name:
+            changes.append(("Name Changed", f"**Before:** #{before.name}\n**After:** #{after.name}"))
+
+        if getattr(before, "topic", None) != getattr(after, "topic", None):
+            b_topic = truncate(getattr(before, "topic", None) or "*(none)*", 400)
+            a_topic = truncate(getattr(after, "topic", None) or "*(none)*", 400)
+            changes.append(("Topic Changed", f"**Before:** {b_topic}\n**After:** {a_topic}"))
+
+        if getattr(before, "slowmode_delay", None) != getattr(after, "slowmode_delay", None):
+            b_sm = getattr(before, "slowmode_delay", 0)
+            a_sm = getattr(after, "slowmode_delay", 0)
+            changes.append(("Slowmode Changed", f"**Before:** `{b_sm}s`\n**After:** `{a_sm}s`"))
+
+        if getattr(before, "nsfw", None) != getattr(after, "nsfw", None):
+            changes.append(("NSFW Changed", f"**Before:** `{before.nsfw}`\n**After:** `{after.nsfw}`"))
+
+        if getattr(before, "category", None) != getattr(after, "category", None):
+            b_cat = before.category.name if getattr(before, "category", None) else "*(none)*"
+            a_cat = after.category.name if getattr(after, "category", None) else "*(none)*"
+            changes.append(("Category Changed", f"**Before:** {b_cat}\n**After:** {a_cat}"))
+
+        if not changes:
+            return
+
+        ch_type = format_channel_type(after)
+        embed = discord.Embed(
+            description=f"**{ch_type} Updated: <#{after.id}> (`#{after.name}`)**",
+            colour=EDIT_COLOR,
+            timestamp=discord.utils.utcnow(),
+        )
+        for field_name, field_val in changes:
+            embed.add_field(name=field_name, value=field_val, inline=False)
+
+        icon_url = after.guild.icon.url if after.guild.icon else None
+        embed.set_author(name=after.guild.name, icon_url=icon_url)
+        embed.set_footer(text=f"ID: {after.id}")
+        await self._send(embed)
+
+    # ---- embed builders (Dyno-style layout) ------------------------------
 
     @staticmethod
     def _build_embed(
@@ -405,16 +612,7 @@ class AutoLogger(commands.Cog):
     ) -> discord.Embed:
         header = f"From: <@{entry.author_id}>   In: <#{entry.channel_id}>"
         timestamp = f"<t:{int(time.time())}:f>"
-
-        meta_line = (
-            f"-# Author: {discord.utils.escape_markdown(entry.author_name)} "
-            f"(`{entry.author_id}`) | Message ID: `{entry.message_id}`"
-        )
-        # Jump link only makes sense while the message still exists (edits).
-        if after is not None:
-            url = f"https://discord.com/channels/{entry.guild_id}/{entry.channel_id}/{entry.message_id}"
-            meta_line += f" | [🔗 Jump to Message]({url})"
-        meta = f"{meta_line}\n-# {timestamp}"
+        meta = f"-# Author: {entry.author_id} | Message ID: {entry.message_id}\n-# {timestamp}"
 
         if after is not None:
             parts = [
@@ -427,13 +625,13 @@ class AutoLogger(commands.Cog):
                 meta,
             ]
         else:
-            parts = [header, "", truncate(before), "", meta]
+            body = truncate(before) if before else "*(image / attachment)*"
+            parts = [header, "", body, "", meta]
 
         return discord.Embed(
             title=title,
             description="\n".join(parts),
             colour=color,
-            timestamp=discord.utils.utcnow(),
         )
 
     @staticmethod
@@ -475,16 +673,30 @@ class AutoLogger(commands.Cog):
             return None
         return channel  # type: ignore[return-value]
 
-    async def _send(self, embed: discord.Embed, file: Optional[discord.File] = None) -> None:
+    async def _send(
+        self,
+        embed: discord.Embed,
+        file: Optional[discord.File] = None,
+        files: Optional[List[discord.File]] = None,
+        view: Optional[discord.ui.View] = None,
+    ) -> None:
         channel = await self._resolve_log_channel()
         if channel is None:
             return
+
+        kwargs: dict = {
+            "embed": embed,
+            "allowed_mentions": discord.AllowedMentions.none(),
+        }
+        if files:
+            kwargs["files"] = files
+        elif file is not None:
+            kwargs["file"] = file
+        if view is not None:
+            kwargs["view"] = view
+
         try:
-            await channel.send(
-                embed=embed,
-                file=file,  # type: ignore[arg-type]
-                allowed_mentions=discord.AllowedMentions.none(),
-            )
+            await channel.send(**kwargs)
         except discord.Forbidden:
             log.error("AutoLogger: missing permissions to post in log channel %s.", LOG_CHANNEL_ID)
         except discord.HTTPException as exc:
