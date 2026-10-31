@@ -1,3 +1,4 @@
+import asyncio
 import datetime
 import os
 import re
@@ -303,7 +304,7 @@ class Moderation(commands.Cog):
         if view:
             view.message = sent_message
 
-    # --- PURGE COMMAND (MOD+) ---
+    # --- FAST DYNO-STYLE PURGE COMMAND (MOD+) ---
     @commands.command(name="purge", aliases=["clear"], help="Purges a set number of messages from the channel, optionally filtered by user.")
     @commands.guild_only()
     @is_mod_or_higher()
@@ -320,9 +321,11 @@ class Moderation(commands.Cog):
 
         if amount <= 0:
             embed = discord.Embed(
-                description="<a:Cross:1514986232294281426> **Invalid format or amount.** Use one of the following:\n"
-                            "`$purge [amount]`\n"
-                            "`$purge [@user] [amount]`",
+                description=(
+                    "<a:Cross:1514986232294281426> **Invalid format or amount.** Use one of the following:\n"
+                    "`$purge [amount]`\n"
+                    "`$purge [@user] [amount]`"
+                ),
                 color=discord.Color.red()
             )
             try:
@@ -342,24 +345,44 @@ class Moderation(commands.Cog):
                 pass
             return await ctx.send(embed=embed, delete_after=5)
 
-        try:
-            await ctx.message.delete()
-        except discord.HTTPException:
-            pass
+        # Discord bulk-delete only supports messages younger than 14 days
+        cutoff_14d = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=14, minutes=-5)
+        to_delete: list[discord.Message] = []
 
         try:
-            search_limit = 1000 if target_member else amount
-            messages = [msg async for msg in ctx.channel.history(limit=search_limit)]
-            
-            if target_member:
-                to_delete = [msg for msg in messages if msg.author == target_member][:amount]
+            if target_member is None:
+                # Single-page fetch (<= 100 messages before the command trigger)
+                async for msg in ctx.channel.history(limit=amount, before=ctx.message):
+                    if msg.created_at < cutoff_14d:
+                        break
+                    to_delete.append(msg)
             else:
-                to_delete = messages[:amount]
+                # Stream history and STOP immediately once `amount` matching messages are found
+                async for msg in ctx.channel.history(limit=500, before=ctx.message):
+                    if msg.created_at < cutoff_14d:
+                        break
+                    if msg.author.id == target_member.id:
+                        to_delete.append(msg)
+                        if len(to_delete) >= amount:
+                            break
 
             actual_deleted = len(to_delete)
 
-            if actual_deleted > 0:
-                await ctx.channel.delete_messages(to_delete)
+            # Bundle ctx.message into the single bulk-delete call whenever total <= 100
+            if actual_deleted == 0:
+                try:
+                    await ctx.message.delete()
+                except discord.HTTPException:
+                    pass
+            elif actual_deleted < 100:
+                await ctx.channel.delete_messages([ctx.message, *to_delete])
+            else:
+                # When purging exactly 100 messages + 1 trigger message (101 total), fire both concurrently
+                await asyncio.gather(
+                    ctx.channel.delete_messages(to_delete),
+                    ctx.message.delete(),
+                    return_exceptions=True,
+                )
 
         except discord.Forbidden:
             embed = discord.Embed(
@@ -376,9 +399,10 @@ class Moderation(commands.Cog):
 
         embed_color = getattr(Config, "EMBED_COLOR", discord.Color.blue())
         user_str = f" sent by {target_member.mention}" if target_member else ""
-        
+        msg_word = "message" if actual_deleted == 1 else "messages"
+
         embed = discord.Embed(
-            description=f"Successfully deleted **{actual_deleted}** messages{user_str}.",
+            description=f"Successfully deleted **{actual_deleted}** {msg_word}{user_str}.",
             color=embed_color
         )
         await ctx.send(embed=embed, delete_after=5)
@@ -391,7 +415,8 @@ class Moderation(commands.Cog):
         if target_member:
             log_fields.insert(1, ("Target User", target_member.mention, True))
 
-        await self.send_mod_log(ctx, "Messages Purged", 0x3498db, log_fields)
+        # Dispatch mod log in the background so confirmation is never delayed
+        asyncio.create_task(self.send_mod_log(ctx, "Messages Purged", 0x3498db, log_fields))
 
     # --- KICK COMMAND (MOD+) ---
     @commands.command(name="kick", help="Kicks a member from the server.")
