@@ -6,6 +6,8 @@ import time
 import discord
 from discord.ext import commands
 
+MANAGEMENT_ROLE_ID = 1272244827693650034
+
 # List of target text channels where auto-messages should post
 TARGET_CHANNELS = [
     1539695841948860448, 1256988813771673650, 1392048548996186164, 1392048587516678144,
@@ -25,6 +27,22 @@ TARGET_CHANNELS = [
 ]
 
 
+def is_management_only():
+    """Allows only Management (1272244827693650034), Administrators, or the Server Owner."""
+    async def predicate(ctx: commands.Context) -> bool:
+        if not ctx.guild:
+            return False
+        role_ids = {r.id for r in ctx.author.roles}
+        if (
+            MANAGEMENT_ROLE_ID in role_ids
+            or ctx.author.guild_permissions.administrator
+            or ctx.author == ctx.guild.owner
+        ):
+            return True
+        raise commands.MissingPermissions(["administrator"])
+    return commands.check(predicate)
+
+
 class AutoMessage(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -37,7 +55,7 @@ class AutoMessage(commands.Cog):
 
         self.state = self._load_state()
         self.master_task: asyncio.Task | None = None
-        self._sem = asyncio.Semaphore(10)  # Smooth concurrency without hitting Discord 429s
+        self._sem = asyncio.Semaphore(10)
         self._lock = asyncio.Lock()
         self._initialized = False
 
@@ -177,7 +195,6 @@ class AutoMessage(commands.Cog):
                     self.state["messages"] = new_messages
                     self._save_state()
 
-                # Subtract execution time so every cycle stays locked to the exact interval
                 elapsed = time.monotonic() - cycle_start
                 sleep_duration = max(1.0, self.state["interval"] - elapsed)
                 await asyncio.sleep(sleep_duration)
@@ -190,21 +207,20 @@ class AutoMessage(commands.Cog):
             return
         self._initialized = True
 
-        # Clean up any leftover widgets from before the bot restarted
         async with self._lock:
             if self.state.get("messages"):
                 print("[AutoMessage] Cleaning up old widget messages from previous session...")
                 await self.delete_all_tracked_messages()
 
-        # If AutoMessage was active before the restart, resume the synced loop automatically
         if self.state.get("active") and self.state.get("session"):
             if not self.master_task or self.master_task.done():
                 self.master_task = asyncio.create_task(self.run_master_loop())
                 print(f"[AutoMessage] Resumed synced loop for '{self.state['session']}'.")
 
-    # --- COMMANDS ---
+    # --- COMMANDS (MANAGEMENT ONLY) ---
     @commands.command(name="automessagesetup", aliases=["amsetup"])
-    @commands.has_permissions(manage_messages=True)
+    @commands.guild_only()
+    @is_management_only()
     async def automessage_setup(self, ctx, time_interval: str, *, session: str):
         """Sets up the rolling auto-message across ALL specified target channels.
         Usage: $automessagesetup 1h Oct/Nov 2026
@@ -218,7 +234,6 @@ class AutoMessage(commands.Cog):
             )
             return await ctx.send(embed=embed)
 
-        # Cancel existing master loop if running
         if self.master_task and not self.master_task.done():
             self.master_task.cancel()
             try:
@@ -226,7 +241,6 @@ class AutoMessage(commands.Cog):
             except asyncio.CancelledError:
                 pass
 
-        # Delete any previous widgets before starting the fresh cycle
         async with self._lock:
             await self.delete_all_tracked_messages()
             self.state["active"] = True
@@ -247,7 +261,8 @@ class AutoMessage(commands.Cog):
         await ctx.send(embed=embed)
 
     @commands.command(name="automessagestop", aliases=["amstop"])
-    @commands.has_permissions(manage_messages=True)
+    @commands.guild_only()
+    @is_management_only()
     async def automessage_stop(self, ctx):
         """Stops auto-messages across all channels and deletes the active widgets."""
         if not self.state.get("active") and not self.state.get("messages"):
@@ -276,8 +291,15 @@ class AutoMessage(commands.Cog):
         await ctx.send(embed=embed)
 
     @automessage_setup.error
-    async def setup_error(self, ctx, error):
-        if isinstance(error, commands.MissingRequiredArgument):
+    @automessage_stop.error
+    async def automessage_error(self, ctx, error):
+        if isinstance(error, (commands.MissingPermissions, commands.CheckFailure)):
+            embed = discord.Embed(
+                description=f"{self.cross} **Only Management members can use this command.**",
+                color=discord.Color.red()
+            )
+            await ctx.send(embed=embed)
+        elif isinstance(error, commands.MissingRequiredArgument):
             embed = discord.Embed(
                 description=f"{self.cross} **Missing arguments.** Correct usage:\n`$automessagesetup [time] [session]`\n*Example: `$automessagesetup 1h Oct/Nov 2026`*",
                 color=discord.Color.red()

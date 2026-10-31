@@ -1,25 +1,23 @@
 import discord
 from discord.ext import commands
 
+# Server Role IDs (Moderator ---> Lead Moderator ---> Management)
+ROLE_MODERATOR = 1256124924356071463
+ROLE_LEAD_MOD = 1376227143545000056
+ROLE_MANAGEMENT = 1272244827693650034
+
 # Define permission hierarchy levels
 PERM_MEMBER = 0
 PERM_MOD = 1
-PERM_ADMIN = 2
+PERM_LEAD_MOD = 2
+PERM_MANAGEMENT = 3
 
 # Central Data Repository
-# Format for each command:
-# "command_name": {
-#     "category": "Category Name",
-#     "level": PERM_LEVEL,
-#     "aliases": ["alias1", "alias2"],
-#     "usage": "<required_arg> [optional_arg]",
-#     "desc": "Short, clear description of what the command does."
-# }
 COMMAND_DATA = {
     # --- AI ---
     "ask": {
         "category": "AI",
-        "level": PERM_ADMIN,
+        "level": PERM_MANAGEMENT,
         "aliases": [],
         "usage": "<query>",
         "desc": "Asks the AI a question with LaTeX math rendering support."
@@ -28,23 +26,23 @@ COMMAND_DATA = {
     # --- APPLICATIONS ---
     "setupapps": {
         "category": "Applications",
-        "level": PERM_ADMIN,
+        "level": PERM_MANAGEMENT,
         "aliases": [],
         "usage": "",
         "desc": "Spawns the official staff application embed and button."
     },
 
-    # --- AUTOMESSAGE ---
+    # --- AUTOMESSAGE (MANAGEMENT ONLY) ---
     "automessagesetup": {
         "category": "Auto Message",
-        "level": PERM_MOD,
+        "level": PERM_MANAGEMENT,
         "aliases": ["amsetup"],
         "usage": "<time_interval> <session>",
         "desc": "Starts synchronized automatic rules notices across target channels."
     },
     "automessagestop": {
         "category": "Auto Message",
-        "level": PERM_MOD,
+        "level": PERM_MANAGEMENT,
         "aliases": ["amstop"],
         "usage": "",
         "desc": "Stops automatic messages and deletes all active notice widgets."
@@ -53,35 +51,35 @@ COMMAND_DATA = {
     # --- AUTOMOD ---
     "automod": {
         "category": "Auto Mod",
-        "level": PERM_ADMIN,
+        "level": PERM_MANAGEMENT,
         "aliases": [],
         "usage": "",
         "desc": "Shows auto moderation configuration subcommands."
     },
     "automod add": {
         "category": "Auto Mod",
-        "level": PERM_ADMIN,
+        "level": PERM_MANAGEMENT,
         "aliases": [],
         "usage": "<word>",
         "desc": "Adds a word to the AutoMod blocked words list."
     },
     "automod remove": {
         "category": "Auto Mod",
-        "level": PERM_ADMIN,
+        "level": PERM_MANAGEMENT,
         "aliases": ["delete"],
         "usage": "<word>",
         "desc": "Removes a word from the AutoMod blocked words list."
     },
     "automod view": {
         "category": "Auto Mod",
-        "level": PERM_ADMIN,
+        "level": PERM_MANAGEMENT,
         "aliases": ["list"],
         "usage": "",
         "desc": "Shows all blocked words in the AutoMod filter."
     },
     "automod whitelist": {
         "category": "Auto Mod",
-        "level": PERM_ADMIN,
+        "level": PERM_MANAGEMENT,
         "aliases": [],
         "usage": "<@member>",
         "desc": "Toggles AutoMod chat filter immunity for a member."
@@ -108,7 +106,7 @@ COMMAND_DATA = {
     # --- CONFESSIONS ---
     "setupconfessions": {
         "category": "Confessions",
-        "level": PERM_ADMIN,
+        "level": PERM_MANAGEMENT,
         "aliases": [],
         "usage": "",
         "desc": "Spawns the anonymous confession submission prompt in the confession channel."
@@ -221,66 +219,66 @@ COMMAND_DATA = {
         "desc": "Withdraws nodes from your secure bank back into your liquid wallet."
     },
 
-    # --- ECONOMY: ADMIN ---
+    # --- ECONOMY: MANAGEMENT ---
     "addnodes": {
         "category": "Economy Management",
-        "level": PERM_ADMIN,
+        "level": PERM_MANAGEMENT,
         "aliases": [],
         "usage": "<@member> <amount>",
         "desc": "Adds nodes directly to a member's liquid wallet."
     },
     "economyblacklist": {
         "category": "Economy Management",
-        "level": PERM_ADMIN,
+        "level": PERM_MANAGEMENT,
         "aliases": ["ecoblacklist", "ecobl"],
         "usage": "",
         "desc": "Shows subcommands for managing the economy blacklist."
     },
     "economyblacklist add": {
         "category": "Economy Management",
-        "level": PERM_ADMIN,
+        "level": PERM_MANAGEMENT,
         "aliases": [],
         "usage": "<@member>",
         "desc": "Blacklists a member from participating in the economy."
     },
     "economyblacklist remove": {
         "category": "Economy Management",
-        "level": PERM_ADMIN,
+        "level": PERM_MANAGEMENT,
         "aliases": [],
         "usage": "<@member>",
         "desc": "Removes a member from the economy blacklist."
     },
     "economyblacklist view": {
         "category": "Economy Management",
-        "level": PERM_ADMIN,
+        "level": PERM_MANAGEMENT,
         "aliases": ["list", "show"],
         "usage": "",
         "desc": "Lists all members currently blacklisted from the economy."
     },
     "economylog": {
         "category": "Economy Management",
-        "level": PERM_ADMIN,
+        "level": PERM_MANAGEMENT,
         "aliases": [],
         "usage": "[@member|user_id]",
         "desc": "Shows up to 25 recent administrative economy audit logs for a user."
     },
     "economyreset": {
         "category": "Economy Management",
-        "level": PERM_ADMIN,
+        "level": PERM_MANAGEMENT,
         "aliases": [],
         "usage": "<@member>",
         "desc": "Completely wipes all node balances, logs, and inventory for a member."
     },
     "removenodes": {
         "category": "Economy Management",
-        "level": PERM_ADMIN,
+        "level": PERM_MANAGEMENT,
         "aliases": [],
         "usage": "<@member> <amount>",
         "desc": "Removes nodes from a member's liquid wallet first, then their secure bank."
     },
     "setnodes": {
         "category": "Economy Management",
-        "level": PERM_ADMIN,
+        "level": PERM_MANAGEMENT,
         "aliases": [],
         "usage": "<@member> <wallet> [bank]",
         "desc": "Sets a member's liquid wallet and secure bank balances directly."
@@ -305,28 +303,28 @@ COMMAND_DATA = {
     # --- KEYWORDS ---
     "keyword": {
         "category": "Keywords",
-        "level": PERM_ADMIN,
+        "level": PERM_MANAGEMENT,
         "aliases": ["keywords"],
         "usage": "",
         "desc": "Shows keyword auto-responder configuration subcommands."
     },
     "keyword add": {
         "category": "Keywords",
-        "level": PERM_ADMIN,
+        "level": PERM_MANAGEMENT,
         "aliases": [],
         "usage": "<trigger> | <response>",
         "desc": "Adds or updates an automatic keyword trigger and response."
     },
     "keyword remove": {
         "category": "Keywords",
-        "level": PERM_ADMIN,
+        "level": PERM_MANAGEMENT,
         "aliases": ["delete"],
         "usage": "<trigger>",
         "desc": "Removes a keyword trigger from the auto-responder list."
     },
     "keyword view": {
         "category": "Keywords",
-        "level": PERM_ADMIN,
+        "level": PERM_MANAGEMENT,
         "aliases": ["list"],
         "usage": "",
         "desc": "Displays all saved keyword triggers and responses with pagination."
@@ -349,21 +347,21 @@ COMMAND_DATA = {
     },
     "xp": {
         "category": "Levels",
-        "level": PERM_ADMIN,
+        "level": PERM_MANAGEMENT,
         "aliases": [],
         "usage": "",
         "desc": "Shows XP management subcommands."
     },
     "xp add": {
         "category": "Levels",
-        "level": PERM_ADMIN,
+        "level": PERM_MANAGEMENT,
         "aliases": [],
         "usage": "<@member> <amount>",
         "desc": "Adds XP points to a member and updates their level."
     },
     "xp remove": {
         "category": "Levels",
-        "level": PERM_ADMIN,
+        "level": PERM_MANAGEMENT,
         "aliases": [],
         "usage": "<@member> <amount>",
         "desc": "Removes XP points from a member and updates their level."
@@ -416,28 +414,28 @@ COMMAND_DATA = {
     },
     "removecase": {
         "category": "Moderation",
-        "level": PERM_ADMIN,
+        "level": PERM_MANAGEMENT,
         "aliases": ["delcase", "deletecase"],
         "usage": "<case_id>",
         "desc": "Deletes a specific moderation case record by its Case ID."
     },
     "reply": {
         "category": "Moderation",
-        "level": PERM_ADMIN,
+        "level": PERM_MANAGEMENT,
         "aliases": [],
         "usage": "[#channel] <message_id> <message>",
         "desc": "Replies to a specific message ID in the current or specified channel through the bot."
     },
     "say": {
         "category": "Moderation",
-        "level": PERM_ADMIN,
+        "level": PERM_MANAGEMENT,
         "aliases": [],
         "usage": "<message>",
         "desc": "Deletes your command and sends the message through the bot."
     },
     "snipe": {
         "category": "Moderation",
-        "level": PERM_ADMIN,
+        "level": PERM_MANAGEMENT,
         "aliases": [],
         "usage": "[1-5]",
         "desc": "Snipes up to the last 5 recently deleted messages in the current channel."
@@ -464,38 +462,38 @@ COMMAND_DATA = {
         "desc": "Warns a member via DM and records the infraction in moderation logs."
     },
 
-    # --- MODMAIL ---
+    # --- MODMAIL (LEAD MODERATOR & MANAGEMENT ONLY) ---
     "close": {
         "category": "Modmail",
-        "level": PERM_MOD,
+        "level": PERM_LEAD_MOD,
         "aliases": [],
         "usage": "",
         "desc": "Closes, locks, and archives an active modmail ticket thread."
     },
     "modmailblacklist": {
         "category": "Modmail",
-        "level": PERM_MOD,
+        "level": PERM_LEAD_MOD,
         "aliases": ["mmblacklist", "mmbl"],
         "usage": "",
         "desc": "Shows subcommands for managing the modmail ticket blacklist."
     },
     "modmailblacklist add": {
         "category": "Modmail",
-        "level": PERM_MOD,
+        "level": PERM_LEAD_MOD,
         "aliases": [],
         "usage": "<@user|user_id>",
         "desc": "Blacklists a user from opening modmail tickets via DM."
     },
     "modmailblacklist remove": {
         "category": "Modmail",
-        "level": PERM_MOD,
+        "level": PERM_LEAD_MOD,
         "aliases": ["delete"],
         "usage": "<@user|user_id>",
         "desc": "Removes a user from the modmail ticket blacklist."
     },
     "modmailblacklist view": {
         "category": "Modmail",
-        "level": PERM_MOD,
+        "level": PERM_LEAD_MOD,
         "aliases": ["list", "show"],
         "usage": "",
         "desc": "Lists all users currently blacklisted from opening modmail tickets."
@@ -527,7 +525,7 @@ COMMAND_DATA = {
     },
     "setrep": {
         "category": "Reputation",
-        "level": PERM_ADMIN,
+        "level": PERM_MANAGEMENT,
         "aliases": [],
         "usage": "<@member> <amount>",
         "desc": "Sets a member's reputation points to a specific amount."
@@ -543,10 +541,61 @@ COMMAND_DATA = {
     },
     "setuprules": {
         "category": "Rules",
-        "level": PERM_ADMIN,
+        "level": PERM_MANAGEMENT,
         "aliases": [],
         "usage": "",
         "desc": "Posts the complete server rules embed in the current channel."
+    },
+
+    # --- SERVER STATISTICS (STATBOT) ---
+    "channel": {
+        "category": "Server Statistics",
+        "level": PERM_MEMBER,
+        "aliases": [],
+        "usage": "[#channel] [days]",
+        "desc": "See a channel's stats."
+    },
+    "chart": {
+        "category": "Server Statistics",
+        "level": PERM_MEMBER,
+        "aliases": [],
+        "usage": "[messages|voice|members|#channel|@user] [days]",
+        "desc": "Generate a detailed chart."
+    },
+    "me": {
+        "category": "Server Statistics",
+        "level": PERM_MEMBER,
+        "aliases": [],
+        "usage": "[days]",
+        "desc": "See your stats in this server."
+    },
+    "server": {
+        "category": "Server Statistics",
+        "level": PERM_MEMBER,
+        "aliases": [],
+        "usage": "[days]",
+        "desc": "See an overview of the server's stats."
+    },
+    "stats": {
+        "category": "Server Statistics",
+        "level": PERM_MEMBER,
+        "aliases": [],
+        "usage": "[messages|voice|members] [days]",
+        "desc": "See an overview of a type of stats."
+    },
+    "top": {
+        "category": "Server Statistics",
+        "level": PERM_MEMBER,
+        "aliases": [],
+        "usage": "[messages|voice|channels] [days]",
+        "desc": "See a list of top members and channels."
+    },
+    "user": {
+        "category": "Server Statistics",
+        "level": PERM_MEMBER,
+        "aliases": [],
+        "usage": "[@member] [days]",
+        "desc": "See a user's stats in this server."
     },
 
     # --- SLOWMODE ---
@@ -577,28 +626,28 @@ COMMAND_DATA = {
     # --- UTILITY ---
     "botstatus": {
         "category": "Utility",
-        "level": PERM_ADMIN,
+        "level": PERM_MANAGEMENT,
         "aliases": [],
         "usage": "",
         "desc": "Fetches the host server systemd service status for the bot."
     },
     "export": {
         "category": "Utility",
-        "level": PERM_ADMIN,
+        "level": PERM_MANAGEMENT,
         "aliases": [],
         "usage": "<filename>",
         "desc": "Exports a database or JSON file from the data/ folder (e.g., economy.db)."
     },
     "ping": {
         "category": "Utility",
-        "level": PERM_ADMIN,
+        "level": PERM_MANAGEMENT,
         "aliases": [],
         "usage": "[host]",
         "desc": "Checks Discord API latency or pings an external network host."
     },
     "steal": {
         "category": "Utility",
-        "level": PERM_ADMIN,
+        "level": PERM_MANAGEMENT,
         "aliases": [],
         "usage": "<custom_emoji> | (reply to sticker)",
         "desc": "Steals a custom emoji or replied-to sticker and adds it to the server."
@@ -609,45 +658,52 @@ COMMAND_DATA = {
 class HelpCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.bot.remove_command("help")  # Unload default help command
+        self.bot.remove_command("help")
 
     def get_user_level(self, ctx: commands.Context) -> int:
-        """Determines the user's permission level based on permissions."""
+        """Determines the user's permission level based on the server role hierarchy."""
         if not ctx.guild:
             return PERM_MEMBER
-        
+
+        role_ids = {role.id for role in ctx.author.roles}
         perms = ctx.author.guild_permissions
-        if perms.administrator:
-            return PERM_ADMIN
-        
-        # Moderator checks
+
+        # 1. Management (1272244827693650034) / Administrator / Server Owner
         if (
-            perms.manage_messages or 
-            perms.manage_threads or
-            perms.kick_members or 
-            perms.ban_members or 
-            perms.moderate_members or 
-            perms.manage_nicknames or 
-            perms.manage_guild
+            ROLE_MANAGEMENT in role_ids
+            or perms.administrator
+            or ctx.author == ctx.guild.owner
+        ):
+            return PERM_MANAGEMENT
+
+        # 2. Lead Moderator (1376227143545000056)
+        if ROLE_LEAD_MOD in role_ids:
+            return PERM_LEAD_MOD
+
+        # 3. Regular Moderator (1256124924356071463)
+        if (
+            ROLE_MODERATOR in role_ids
+            or perms.manage_messages
+            or perms.kick_members
+            or perms.ban_members
+            or perms.moderate_members
+            or perms.manage_nicknames
         ):
             return PERM_MOD
-            
+
         return PERM_MEMBER
 
     def find_command_entry(self, query: str):
         """Finds a command in COMMAND_DATA by exact name, alias, or parent+subcommand alias."""
         query = query.lower().strip()
 
-        # 1. Direct match on command name or alias
         for name, data in COMMAND_DATA.items():
             if query == name or query in data.get("aliases", []):
                 return name, data
 
-        # 2. Match subcommand where parent or subcommand used an alias (e.g., "mmbl add" or "automod delete")
         parts = query.split()
         if len(parts) == 2:
             parent_q, sub_q = parts[0], parts[1]
-            # Resolve parent alias if applicable
             resolved_parent = parent_q
             for name, data in COMMAND_DATA.items():
                 if " " not in name and (parent_q == name or parent_q in data.get("aliases", [])):
@@ -702,7 +758,12 @@ class HelpCog(commands.Cog):
                 
             embed.add_field(name="Category", value=target_info["category"], inline=True)
             
-            level_labels = {PERM_MEMBER: "Member", PERM_MOD: "Moderator", PERM_ADMIN: "Administrator"}
+            level_labels = {
+                PERM_MEMBER: "Member",
+                PERM_MOD: "Moderator",
+                PERM_LEAD_MOD: "Lead Moderator",
+                PERM_MANAGEMENT: "Management"
+            }
             embed.add_field(name="Required Role", value=level_labels.get(target_info["level"], "Member"), inline=True)
             
             await ctx.send(embed=embed)
@@ -727,8 +788,7 @@ class HelpCog(commands.Cog):
             await ctx.send(embed=embed)
             return
 
-        # Build directory tree format
-        tree_lines = ["Commands/                                                            "]
+        tree_lines = ["Commands/"]
         sorted_cats = sorted(categories.keys())
 
         for c_idx, cat in enumerate(sorted_cats):
@@ -739,11 +799,8 @@ class HelpCog(commands.Cog):
             cmds = sorted(categories[cat])
             for m_idx, cmd in enumerate(cmds):
                 is_last_cmd = (m_idx == len(cmds) - 1)
-                
-                # Adjust indent spacing depending on whether the category is last
                 child_indent = "    " if is_last_cat else "│   "
                 cmd_prefix = "└── " if is_last_cmd else "├── "
-                
                 tree_lines.append(f"{child_indent}{cmd_prefix}{prefix}{cmd}")
 
         tree_str = "\n".join(tree_lines)

@@ -7,6 +7,26 @@ from config import Config
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODMAIL_BLACKLIST_FILE = os.path.join(BASE_DIR, "data", "modmail_blacklist.json")
 
+LEAD_MOD_ROLE_ID = 1376227143545000056
+MANAGEMENT_ROLE_ID = 1272244827693650034
+
+
+def is_lead_mod_or_higher():
+    """Allows only Lead Moderator (1376227143545000056), Management (1272244827693650034), or Administrators."""
+    async def predicate(ctx: commands.Context) -> bool:
+        if not ctx.guild:
+            return False
+        role_ids = {r.id for r in ctx.author.roles}
+        if (
+            LEAD_MOD_ROLE_ID in role_ids
+            or MANAGEMENT_ROLE_ID in role_ids
+            or ctx.author.guild_permissions.administrator
+            or ctx.author == ctx.guild.owner
+        ):
+            return True
+        raise commands.MissingPermissions(["manage_threads"])
+    return commands.check(predicate)
+
 
 class Modmail(commands.Cog):
     def __init__(self, bot):
@@ -90,7 +110,6 @@ class Modmail(commands.Cog):
 
         # 4. HANDLE INCOMING DMS (User -> Staff)
         if message.guild is None:
-            # Check if the user is blacklisted from opening a ticket
             if message.author.id in self.blacklisted_users:
                 embed = discord.Embed(
                     description=f"{self.cross} **You are blacklisted from opening a ticket**",
@@ -107,7 +126,6 @@ class Modmail(commands.Cog):
                 print("Modmail error: Channel ID not found in config.")
                 return
 
-            # Look through existing active threads to see if this user already has an open ticket
             thread_name = f"Ticket-{message.author.id}"
             active_thread = None
 
@@ -116,7 +134,6 @@ class Modmail(commands.Cog):
                     active_thread = thread
                     break
 
-            # If no active thread exists, create a brand new one
             if not active_thread:
                 init_embed = discord.Embed(
                     title="New Modmail Ticket Created",
@@ -127,7 +144,7 @@ class Modmail(commands.Cog):
                 staff_msg = await modmail_channel.send(embed=init_embed)
                 active_thread = await staff_msg.create_thread(
                     name=thread_name,
-                    auto_archive_duration=1440  # 24 hours
+                    auto_archive_duration=1440
                 )
                 
                 embed = discord.Embed(
@@ -136,7 +153,6 @@ class Modmail(commands.Cog):
                 )
                 await message.author.send(embed=embed)
 
-            # Forward user's content
             user_embed = discord.Embed(
                 description=message.content or "*[No text content]*",
                 color=discord.Color.light_gray()
@@ -190,10 +206,10 @@ class Modmail(commands.Cog):
                         )
                         await message.channel.send(embed=embed)
 
-    # 6. UTILITY COMMAND TO CLOSE TICKETS
+    # 6. UTILITY COMMAND TO CLOSE TICKETS (LEAD MOD & MANAGEMENT ONLY)
     @commands.command(name="close")
     @commands.guild_only()
-    @commands.has_permissions(manage_threads=True)
+    @is_lead_mod_or_higher()
     async def close_ticket(self, ctx):
         """Closes and archives a modmail thread."""
         if not isinstance(ctx.channel, discord.Thread) or ctx.channel.parent_id != Config.MODMAIL_CHANNEL_ID:
@@ -225,10 +241,10 @@ class Modmail(commands.Cog):
         await ctx.send(embed=staff_embed)
         await ctx.channel.edit(archived=True, locked=True)
 
-    # 7. MODMAIL BLACKLIST COMMAND GROUP
+    # 7. MODMAIL BLACKLIST COMMAND GROUP (LEAD MOD & MANAGEMENT ONLY)
     @commands.group(name="modmailblacklist", aliases=["mmblacklist", "mmbl"], invoke_without_command=True)
     @commands.guild_only()
-    @commands.check_any(commands.has_permissions(manage_threads=True), commands.has_permissions(manage_messages=True))
+    @is_lead_mod_or_higher()
     async def modmail_blacklist(self, ctx):
         """Parent command for managing the modmail blacklist."""
         embed = discord.Embed(
@@ -245,7 +261,7 @@ class Modmail(commands.Cog):
 
     @modmail_blacklist.command(name="add")
     @commands.guild_only()
-    @commands.check_any(commands.has_permissions(manage_threads=True), commands.has_permissions(manage_messages=True))
+    @is_lead_mod_or_higher()
     async def modmail_blacklist_add(self, ctx, *, target: str):
         """Blacklists a user from opening modmail tickets."""
         user_id, mention_str = await self.resolve_target_id(ctx, target)
@@ -274,7 +290,7 @@ class Modmail(commands.Cog):
 
     @modmail_blacklist.command(name="remove", aliases=["delete"])
     @commands.guild_only()
-    @commands.check_any(commands.has_permissions(manage_threads=True), commands.has_permissions(manage_messages=True))
+    @is_lead_mod_or_higher()
     async def modmail_blacklist_remove(self, ctx, *, target: str):
         """Removes a user from the modmail blacklist."""
         user_id, mention_str = await self.resolve_target_id(ctx, target)
@@ -303,7 +319,7 @@ class Modmail(commands.Cog):
 
     @modmail_blacklist.command(name="view", aliases=["list", "show"])
     @commands.guild_only()
-    @commands.check_any(commands.has_permissions(manage_threads=True), commands.has_permissions(manage_messages=True))
+    @is_lead_mod_or_higher()
     async def modmail_blacklist_view(self, ctx):
         """Lists all users currently blacklisted from Modmail with interactive pagination."""
         if not self.blacklisted_users:
@@ -379,9 +395,9 @@ class Modmail(commands.Cog):
     @modmail_blacklist_remove.error
     @modmail_blacklist_view.error
     async def modmail_error(self, ctx, error):
-        if isinstance(error, (commands.MissingPermissions, commands.CheckAnyFailure)):
+        if isinstance(error, (commands.MissingPermissions, commands.CheckAnyFailure, commands.CheckFailure)):
             embed = discord.Embed(
-                description=f"{self.cross} **You do not have the required staff permissions to use this command.**",
+                description=f"{self.cross} **Only Lead Moderators and Management can use this command.**",
                 color=discord.Color.red()
             )
             await ctx.send(embed=embed)
