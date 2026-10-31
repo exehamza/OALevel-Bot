@@ -22,6 +22,9 @@ DB_PATH = os.path.join(BASE_DIR, "data", "database.sqlite")
 BLACKLIST_JSON_PATH = os.path.join(BASE_DIR, "data", "serverstats_blacklist.json")
 os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 
+# 2x Retina Render Scale (1920x1120 output)
+S = 2
+
 # Default blacklisted staff & miscellaneous channel IDs
 DEFAULT_BLACKLISTED_CHANNELS = {
     1296530025637740554,
@@ -100,12 +103,30 @@ def parse_days_arg(arg: Optional[str]) -> Optional[int]:
     return max(1, min(int(match.group(1)), 90))
 
 
+# Singular / Plural Formatting Helpers
+def fmt_days(d: int, *, caps: bool = False) -> str:
+    unit = "DAY" if d == 1 else "DAYS"
+    if not caps:
+        unit = unit.title()
+    return f"{d} {unit}"
+
+
+def fmt_msgs(n: int) -> str:
+    return f"{n:,} msg" if n == 1 else f"{n:,} msgs"
+
+
+def fmt_users(n: int, word: str = "user") -> str:
+    return f"{n:,} {word}" if n == 1 else f"{n:,} {word}s"
+
+
 def format_voice_hours(seconds: int) -> str:
     hrs = max(0, seconds) / 3600.0
     if hrs == 0:
         return "0.00 hrs"
     if hrs < 0.01:
         return "0.01 hrs"
+    if abs(hrs - 1.0) < 0.005:
+        return "1.00 hr"
     return f"{hrs:,.2f} hrs"
 
 
@@ -122,12 +143,41 @@ def format_voice_short(seconds: int) -> str:
     return f"{secs}s"
 
 
-def fit_text(draw: ImageDraw.ImageDraw, text: str, font, max_width: int) -> str:
-    if draw.textlength(text, font=font) <= max_width:
+def fit_text(draw: ImageDraw.ImageDraw, text: str, font, max_width_px: int) -> str:
+    if draw.textlength(text, font=font) <= max_width_px:
         return text
-    while len(text) > 3 and draw.textlength(text + "…", font=font) > max_width:
+    while len(text) > 3 and draw.textlength(text + "…", font=font) > max_width_px:
         text = text[:-1]
     return text + "…"
+
+
+def draw_fitted_text(
+    draw: ImageDraw.ImageDraw,
+    x: int,
+    y: int,
+    text: str,
+    *,
+    font_file: str = "Arial-Bold.TTF",
+    max_size: int = 20,
+    min_size: int = 11,
+    max_width: int = 300,
+    fill=TEXT_WHITE,
+    align_right: bool = False,
+):
+    """Automatically scales font size down so text fits without '...' truncation whenever possible."""
+    target_w = max_width * S
+    size = max_size * S
+    min_s = min_size * S
+    font = load_font(font_file, size)
+
+    while size > min_s and draw.textlength(text, font=font) > target_w:
+        size -= 1
+        font = load_font(font_file, size)
+
+    final_text = fit_text(draw, text, font, target_w)
+    y_offset = ((max_size * S) - size) // 2
+    draw_x = (x * S - draw.textlength(final_text, font=font)) if align_right else (x * S)
+    draw.text((draw_x, y * S + y_offset), final_text, fill=fill, font=font)
 
 
 # ----------------------------------------------------------------------
@@ -198,8 +248,8 @@ class StatbotInteractiveView(discord.ui.View):
         cog: "ServerStats",
         ctx: commands.Context,
         *,
-        context_kind: str,     # "user", "channel", "server", "stats"
-        display_mode: str,     # "overview" or "chart"
+        context_kind: str,
+        display_mode: str,
         stat_type: str = "messages",
         days: int = 14,
         target_member: Optional[discord.Member] = None,
@@ -221,11 +271,9 @@ class StatbotInteractiveView(discord.ui.View):
     def _rebuild_components(self):
         self.clear_items()
 
-        # Add dropdown selector when in chart mode or $stats mode or user/channel chart
         if self.display_mode == "chart" or self.context_kind == "stats":
             self.add_item(StatTypeSelect(self))
 
-        # Toggle button: Chart <-> Overview
         toggle_label = "Overview" if self.display_mode == "chart" else "Chart"
         toggle_emoji = "📊" if self.display_mode == "chart" else "📈"
         toggle_btn = discord.ui.Button(
@@ -237,7 +285,6 @@ class StatbotInteractiveView(discord.ui.View):
         toggle_btn.callback = self._on_toggle_mode
         self.add_item(toggle_btn)
 
-        # Refresh button
         refresh_btn = discord.ui.Button(
             label="Refresh",
             emoji="🔄",
@@ -247,7 +294,6 @@ class StatbotInteractiveView(discord.ui.View):
         refresh_btn.callback = self._on_refresh
         self.add_item(refresh_btn)
 
-        # Lookback buttons (7d, 14d, 30d)
         for lb in (7, 14, 30):
             style = discord.ButtonStyle.success if self.days == lb else discord.ButtonStyle.secondary
             lb_btn = discord.ui.Button(label=f"{lb}d", style=style, row=1)
@@ -699,43 +745,81 @@ class ServerStats(commands.Cog):
             await asyncio.to_thread(self._record_member_flow, member.guild.id, joined=False)
 
     # ------------------------------------------------------------------
-    # Graphical Helpers (PIL + Matplotlib Sub-Chart)
+    # Graphical Helpers (2x Retina PIL + 200 DPI Matplotlib)
     # ------------------------------------------------------------------
 
-    async def _fetch_avatar_image(self, url: Optional[str], size: int = 64) -> Optional[Image.Image]:
+    async def _fetch_avatar_image(self, url: Optional[str], size: int = 60) -> Optional[Image.Image]:
         if not url:
             return None
+        target_px = size * S
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
                     if resp.status == 200:
                         raw = await resp.read()
                         img = Image.open(io.BytesIO(raw)).convert("RGBA")
-                        return img.resize((size, size), Image.Resampling.LANCZOS)
+                        return img.resize((target_px, target_px), Image.Resampling.LANCZOS)
         except Exception:
             return None
         return None
 
     @staticmethod
-    def _paste_circular_icon(canvas: Image.Image, icon: Optional[Image.Image], x: int, y: int, size: int = 64, badge_text: str = "#"):
+    def _paste_circular_icon(
+        canvas: Image.Image,
+        icon: Optional[Image.Image],
+        x: int,
+        y: int,
+        size: int = 60,
+        badge_text: str = "#",
+    ):
+        px, py, psize = x * S, y * S, size * S
         draw = ImageDraw.Draw(canvas)
         if icon is not None:
-            mask = Image.new("L", (size, size), 0)
-            ImageDraw.Draw(mask).ellipse((0, 0, size, size), fill=255)
-            canvas.paste(icon, (x, y), mask=mask)
+            # 4x supersampled anti-aliased circular mask
+            mask_big = Image.new("L", (psize * 2, psize * 2), 0)
+            ImageDraw.Draw(mask_big).ellipse((0, 0, psize * 2, psize * 2), fill=255)
+            mask = mask_big.resize((psize, psize), Image.Resampling.LANCZOS)
+            canvas.paste(icon, (px, py), mask=mask)
         else:
-            draw.ellipse((x, y, x + size, y + size), fill=CARD_INNER, outline=SB_GREEN, width=2)
-            f_badge = load_font("Arial-Bold.TTF", int(size * 0.48))
+            draw.ellipse((px, py, px + psize, py + psize), fill=CARD_INNER, outline=SB_GREEN, width=2 * S)
+            f_badge = load_font("Arial-Bold.TTF", int(psize * 0.48))
             tw = draw.textlength(badge_text, font=f_badge)
-            draw.text((x + (size - tw) / 2, y + size * 0.22), badge_text, fill=SB_GREEN, font=f_badge)
+            draw.text((px + (psize - tw) / 2, py + psize * 0.22), badge_text, fill=SB_GREEN, font=f_badge)
 
     @staticmethod
-    def _draw_bento_box(draw: ImageDraw.ImageDraw, x: int, y: int, w: int, h: int, title: Optional[str] = None, accent=SB_GREEN):
-        draw.rounded_rectangle([x, y, x + w, y + h], radius=14, fill=CARD_BG, outline=CARD_BORDER, width=1)
+    def _draw_bento_box(
+        draw: ImageDraw.ImageDraw,
+        x: int,
+        y: int,
+        w: int,
+        h: int,
+        title: Optional[str] = None,
+        accent=SB_GREEN,
+    ):
+        draw.rounded_rectangle(
+            [x * S, y * S, (x + w) * S, (y + h) * S],
+            radius=14 * S,
+            fill=CARD_BG,
+            outline=CARD_BORDER,
+            width=1 * S,
+        )
         if title:
-            f_title = load_font("Arial-Bold.TTF", 17)
-            draw.rounded_rectangle([x + 14, y + 14, x + 18, y + 34], radius=2, fill=accent)
-            draw.text((x + 26, y + 13), title, fill=TEXT_WHITE, font=f_title)
+            draw.rounded_rectangle(
+                [(x + 14) * S, (y + 14) * S, (x + 18) * S, (y + 34) * S],
+                radius=2 * S,
+                fill=accent,
+            )
+            draw_fitted_text(
+                draw,
+                x + 26,
+                y + 13,
+                title,
+                font_file="Arial-Bold.TTF",
+                max_size=17,
+                min_size=12,
+                max_width=w - 38,
+                fill=TEXT_WHITE,
+            )
 
     @staticmethod
     def _draw_header(
@@ -749,21 +833,46 @@ class ServerStats(commands.Cog):
         badge_text: str = "#",
     ):
         ServerStats._paste_circular_icon(canvas, icon, 28, 22, 60, badge_text=badge_text)
-        f_title = load_font("Arial-Bold.TTF", 28)
-        f_sub = load_font("Arial.TTF", 15)
-        f_pill = load_font("Arial-Bold.TTF", 14)
 
-        clean_title = fit_text(draw, title, f_title, 580)
-        draw.text((102, 24), clean_title, fill=TEXT_WHITE, font=f_title)
-        draw.text((102, 59), subtitle, fill=TEXT_MUTED, font=f_sub)
+        # Draw Lookback pill on top-right first so we know exact available width for Title
+        f_pill = load_font("Arial-Bold.TTF", 14 * S)
+        pill_text = f"LOOKBACK: {fmt_days(days, caps=True)}"
+        pw_px = int(draw.textlength(pill_text, font=f_pill)) + 28 * S
+        px_px = (960 - 28) * S - pw_px
+        py_px = 28 * S
+        draw.rounded_rectangle(
+            [px_px, py_px, px_px + pw_px, py_px + 34 * S],
+            radius=10 * S,
+            fill=CARD_BG,
+            outline=SB_GREEN,
+            width=1 * S,
+        )
+        draw.text((px_px + 14 * S, py_px + 8 * S), pill_text, fill=SB_GREEN, font=f_pill)
 
-        # Lookback pill on top-right
-        pill_text = f"LOOKBACK: {days} DAYS"
-        pw = int(draw.textlength(pill_text, font=f_pill)) + 28
-        px = 960 - 28 - pw
-        py = 28
-        draw.rounded_rectangle([px, py, px + pw, py + 34], radius=10, fill=CARD_BG, outline=SB_GREEN, width=1)
-        draw.text((px + 14, py + 8), pill_text, fill=SB_GREEN, font=f_pill)
+        # Dynamically fit Title in the exact space between icon (x=102) and Lookback pill
+        available_title_w = int((px_px - 102 * S - 16 * S) / S)
+        draw_fitted_text(
+            draw,
+            102,
+            24,
+            title,
+            font_file="Arial-Bold.TTF",
+            max_size=27,
+            min_size=14,
+            max_width=available_title_w,
+            fill=TEXT_WHITE,
+        )
+        draw_fitted_text(
+            draw,
+            102,
+            59,
+            subtitle,
+            font_file="Arial.TTF",
+            max_size=15,
+            min_size=11,
+            max_width=available_title_w,
+            fill=TEXT_MUTED,
+        )
 
     @staticmethod
     def _render_plot_image(
@@ -779,13 +888,13 @@ class ServerStats(commands.Cog):
         secondary_label: Optional[str] = None,
     ) -> Image.Image:
         dates = [datetime.strptime(d, "%Y-%m-%d") for d in days_list]
-        dpi = 100
-        fig, ax = plt.subplots(figsize=(width_px / dpi, height_px / dpi), dpi=dpi)
+        dpi = 100 * S
+        fig, ax = plt.subplots(figsize=(width_px / 100.0, height_px / 100.0), dpi=dpi)
         fig.patch.set_facecolor("#232428")
         ax.set_facecolor("#18191c")
 
         ms = 4.5 if len(dates) <= 16 else 3.0
-        ax.plot(dates, values, color=color, linewidth=2.5, marker="o", markersize=ms, label=primary_label)
+        ax.plot(dates, values, color=color, linewidth=2.4, marker="o", markersize=ms, label=primary_label)
         ax.fill_between(dates, values, color=color, alpha=0.22)
 
         if secondary_values is not None:
@@ -819,7 +928,7 @@ class ServerStats(commands.Cog):
 
         plt.tight_layout(pad=0.8)
         buf = io.BytesIO()
-        plt.savefig(buf, format="png", facecolor=fig.get_facecolor(), edgecolor="none")
+        plt.savefig(buf, format="png", dpi=dpi, facecolor=fig.get_facecolor(), edgecolor="none")
         buf.seek(0)
         plt.close(fig)
         return Image.open(buf).convert("RGBA")
@@ -964,7 +1073,7 @@ class ServerStats(commands.Cog):
         )
 
         def _draw_card() -> io.BytesIO:
-            canvas = Image.new("RGBA", (960, 560), BG_DARK)
+            canvas = Image.new("RGBA", (960 * S, 560 * S), BG_DARK)
             draw = ImageDraw.Draw(canvas)
             self._draw_header(
                 canvas,
@@ -975,60 +1084,40 @@ class ServerStats(commands.Cog):
                 icon=avatar_img,
             )
 
-            # Top 3 Bento Boxes
             self._draw_bento_box(draw, 28, 96, 288, 128, f"Server Ranks ({days}d)", SB_GOLD)
             self._draw_bento_box(draw, 336, 96, 288, 128, "Messages Sent", SB_GREEN)
             self._draw_bento_box(draw, 644, 96, 288, 128, "Voice Activity", SB_BLUE)
 
-            f_lbl = load_font("Arial.TTF", 15)
-            f_val = load_font("Arial-Bold.TTF", 20)
+            draw_fitted_text(draw, 46, 146, "Message Rank", font_file="Arial.TTF", max_size=15, min_size=12, max_width=140, fill=TEXT_MUTED)
+            draw_fitted_text(draw, 300, 143, f"#{m_rank}" if m_rank else "Unranked", max_size=20, min_size=14, max_width=110, fill=SB_GREEN, align_right=True)
+            draw_fitted_text(draw, 46, 182, "Voice Rank", font_file="Arial.TTF", max_size=15, min_size=12, max_width=140, fill=TEXT_MUTED)
+            draw_fitted_text(draw, 300, 179, f"#{v_rank}" if v_rank else "Unranked", max_size=20, min_size=14, max_width=110, fill=SB_BLUE, align_right=True)
 
-            # Box 1: Ranks
-            draw.text((46, 146), "Message Rank", fill=TEXT_MUTED, font=f_lbl)
-            draw.text((210, 143), f"#{m_rank}" if m_rank else "Unranked", fill=SB_GREEN, font=f_val)
-            draw.text((46, 182), "Voice Rank", fill=TEXT_MUTED, font=f_lbl)
-            draw.text((210, 179), f"#{v_rank}" if v_rank else "Unranked", fill=SB_BLUE, font=f_val)
-
-            # Box 2: Messages
-            for idx, (label, d_key) in enumerate([("24 Hours", 1), ("7 Days", 7), (f"{days} Days", days)]):
+            for idx, (label, d_key) in enumerate([("24 Hours", 1), ("7 Days", 7), (fmt_days(days), days)]):
                 yy = 142 + idx * 25
-                draw.text((354, yy), label, fill=TEXT_MUTED, font=f_lbl)
-                val_s = f"{msg_w.get(d_key, 0):,} msgs"
-                vw = draw.textlength(val_s, font=f_lbl)
-                draw.text((606 - vw, yy), val_s, fill=TEXT_WHITE, font=load_font("Arial-Bold.TTF", 15))
+                draw_fitted_text(draw, 354, yy, label, font_file="Arial.TTF", max_size=15, min_size=12, max_width=110, fill=TEXT_MUTED)
+                draw_fitted_text(draw, 606, yy, fmt_msgs(msg_w.get(d_key, 0)), max_size=15, min_size=12, max_width=135, fill=TEXT_WHITE, align_right=True)
 
-            # Box 3: Voice
-            for idx, (label, d_key) in enumerate([("24 Hours", 1), ("7 Days", 7), (f"{days} Days", days)]):
-                yy = 142 + idx * 25
-                draw.text((662, yy), label, fill=TEXT_MUTED, font=f_lbl)
-                val_s = format_voice_hours(vc_w.get(d_key, 0))
-                vw = draw.textlength(val_s, font=f_lbl)
-                draw.text((914 - vw, yy), val_s, fill=TEXT_WHITE, font=load_font("Arial-Bold.TTF", 15))
+                draw_fitted_text(draw, 662, yy, label, font_file="Arial.TTF", max_size=15, min_size=12, max_width=110, fill=TEXT_MUTED)
+                draw_fitted_text(draw, 914, yy, format_voice_hours(vc_w.get(d_key, 0)), max_size=15, min_size=12, max_width=135, fill=TEXT_WHITE, align_right=True)
 
-            # Bottom Left: Top Channels
             self._draw_bento_box(draw, 28, 240, 360, 292, f"Most Active Channels ({days}d)", SB_GREEN)
             if top_ch:
                 max_c = max(top_ch[0][1], 1)
-                f_row = load_font("Arial-Bold.TTF", 14)
-                f_num = load_font("Arial.TTF", 14)
                 for i, (ch_name, cnt) in enumerate(top_ch):
                     ry = 286 + i * 46
-                    draw.rounded_rectangle([44, ry, 372, ry + 36], radius=8, fill=CARD_INNER)
-                    bar_w = int(328 * (cnt / max_c))
-                    if bar_w > 6:
-                        draw.rounded_rectangle([44, ry + 32, 44 + bar_w, ry + 36], radius=2, fill=SB_GREEN)
-                    c_label = fit_text(draw, f"#{i + 1}  #{ch_name}", f_row, 210)
-                    draw.text((54, ry + 8), c_label, fill=TEXT_WHITE, font=f_row)
-                    cnt_s = f"{cnt:,}"
-                    cw = draw.textlength(cnt_s, font=f_num)
-                    draw.text((362 - cw, ry + 8), cnt_s, fill=SB_GREEN, font=f_row)
+                    draw.rounded_rectangle([44 * S, ry * S, 372 * S, (ry + 36) * S], radius=8 * S, fill=CARD_INNER)
+                    bar_w = int(328 * S * (cnt / max_c))
+                    if bar_w > 6 * S:
+                        draw.rounded_rectangle([44 * S, (ry + 32) * S, 44 * S + bar_w, (ry + 36) * S], radius=2 * S, fill=SB_GREEN)
+                    draw_fitted_text(draw, 54, ry + 8, f"#{i + 1}  #{ch_name}", max_size=14, min_size=10, max_width=225, fill=TEXT_WHITE)
+                    draw_fitted_text(draw, 362, ry + 8, f"{cnt:,}", max_size=14, min_size=11, max_width=75, fill=SB_GREEN, align_right=True)
             else:
-                draw.text((48, 365), "No channel activity recorded yet.", fill=TEXT_DIM, font=f_lbl)
+                draw_fitted_text(draw, 48, 365, "No channel activity recorded yet.", font_file="Arial.TTF", max_size=15, min_size=12, max_width=320, fill=TEXT_DIM)
 
-            # Bottom Right: Chart
             self._draw_bento_box(draw, 404, 240, 528, 292, f"Message Activity ({days}d)", SB_GREEN)
             plot_img = self._render_plot_image(buckets, series, width_px=500, height_px=235, ylabel="Messages")
-            canvas.paste(plot_img, (418, 284))
+            canvas.paste(plot_img, (418 * S, 284 * S))
 
             out = io.BytesIO()
             canvas.save(out, format="PNG")
@@ -1090,7 +1179,7 @@ class ServerStats(commands.Cog):
         )
 
         def _draw_card() -> io.BytesIO:
-            canvas = Image.new("RGBA", (960, 560), BG_DARK)
+            canvas = Image.new("RGBA", (960 * S, 560 * S), BG_DARK)
             draw = ImageDraw.Draw(canvas)
             accent = SB_BLUE if is_voice else SB_GREEN
             self._draw_header(
@@ -1100,58 +1189,48 @@ class ServerStats(commands.Cog):
                 subtitle=f"{'Voice' if is_voice else 'Text'} Channel Statistics • {guild.name}",
                 days=days,
                 icon=icon_img,
-                badge_text="🔊" if is_voice else "#",
+                badge_text="VC" if is_voice else "#",
             )
 
             self._draw_bento_box(draw, 28, 96, 288, 128, "Channel Standing", SB_GOLD)
             self._draw_bento_box(draw, 336, 96, 288, 128, "Activity Totals", accent)
             self._draw_bento_box(draw, 644, 96, 288, 128, "Engagement", accent)
 
-            f_lbl = load_font("Arial.TTF", 15)
-            f_val = load_font("Arial-Bold.TTF", 20)
-            f_bold = load_font("Arial-Bold.TTF", 15)
-            unit_fn = format_voice_hours if is_voice else (lambda v: f"{v:,} msgs")
+            unit_fn = format_voice_hours if is_voice else fmt_msgs
 
-            draw.text((46, 146), f"Rank ({days}d)", fill=TEXT_MUTED, font=f_lbl)
-            draw.text((205, 143), f"#{ch_rank}" if ch_rank else "Unranked", fill=SB_GOLD, font=f_val)
-            draw.text((46, 182), "Channel Type", fill=TEXT_MUTED, font=f_lbl)
-            draw.text((205, 182), "Voice" if is_voice else "Text", fill=TEXT_WHITE, font=f_bold)
+            draw_fitted_text(draw, 46, 146, f"Rank ({days}d)", font_file="Arial.TTF", max_size=15, min_size=12, max_width=130, fill=TEXT_MUTED)
+            draw_fitted_text(draw, 300, 143, f"#{ch_rank}" if ch_rank else "Unranked", max_size=20, min_size=14, max_width=110, fill=SB_GOLD, align_right=True)
+            draw_fitted_text(draw, 46, 182, "Channel Type", font_file="Arial.TTF", max_size=15, min_size=12, max_width=130, fill=TEXT_MUTED)
+            draw_fitted_text(draw, 300, 182, "Voice" if is_voice else "Text", max_size=15, min_size=12, max_width=110, fill=TEXT_WHITE, align_right=True)
 
-            for idx, (label, d_key) in enumerate([("24 Hours", 1), ("7 Days", 7), (f"{days} Days", days)]):
+            for idx, (label, d_key) in enumerate([("24 Hours", 1), ("7 Days", 7), (fmt_days(days), days)]):
                 yy = 142 + idx * 25
-                draw.text((354, yy), label, fill=TEXT_MUTED, font=f_lbl)
-                val_s = unit_fn(windows.get(d_key, 0))
-                vw = draw.textlength(val_s, font=f_bold)
-                draw.text((606 - vw, yy), val_s, fill=TEXT_WHITE, font=f_bold)
+                draw_fitted_text(draw, 354, yy, label, font_file="Arial.TTF", max_size=15, min_size=12, max_width=110, fill=TEXT_MUTED)
+                draw_fitted_text(draw, 606, yy, unit_fn(windows.get(d_key, 0)), max_size=15, min_size=12, max_width=135, fill=TEXT_WHITE, align_right=True)
 
             total_d = windows.get(days, 0)
             daily_avg = unit_fn(int(total_d / max(1, days)))
-            draw.text((662, 146), "Contributors", fill=TEXT_MUTED, font=f_lbl)
-            draw.text((815, 143), f"{len(contributors):,} users", fill=accent, font=f_bold)
-            draw.text((662, 182), "Daily Average", fill=TEXT_MUTED, font=f_lbl)
-            draw.text((815, 182), daily_avg, fill=TEXT_WHITE, font=f_bold)
+            draw_fitted_text(draw, 662, 146, "Contributors", font_file="Arial.TTF", max_size=15, min_size=12, max_width=120, fill=TEXT_MUTED)
+            draw_fitted_text(draw, 914, 146, fmt_users(len(contributors), "user"), max_size=15, min_size=12, max_width=130, fill=accent, align_right=True)
+            draw_fitted_text(draw, 662, 182, "Daily Average", font_file="Arial.TTF", max_size=15, min_size=12, max_width=120, fill=TEXT_MUTED)
+            draw_fitted_text(draw, 914, 182, daily_avg, max_size=15, min_size=12, max_width=130, fill=TEXT_WHITE, align_right=True)
 
-            # Bottom Left: Top Members in Channel
             self._draw_bento_box(draw, 28, 240, 360, 292, f"Top Channel Members ({days}d)", accent)
             top_5 = contributors[:5]
             if top_5:
                 max_v = max(top_5[0][1], 1)
-                f_row = load_font("Arial-Bold.TTF", 14)
                 for i, (m_name, val) in enumerate(top_5):
                     ry = 286 + i * 46
-                    draw.rounded_rectangle([44, ry, 372, ry + 36], radius=8, fill=CARD_INNER)
-                    bar_w = int(328 * (val / max_v))
-                    if bar_w > 6:
-                        draw.rounded_rectangle([44, ry + 32, 44 + bar_w, ry + 36], radius=2, fill=accent)
-                    u_lbl = fit_text(draw, f"#{i + 1}  {m_name}", f_row, 200)
-                    draw.text((54, ry + 8), u_lbl, fill=TEXT_WHITE, font=f_row)
+                    draw.rounded_rectangle([44 * S, ry * S, 372 * S, (ry + 36) * S], radius=8 * S, fill=CARD_INNER)
+                    bar_w = int(328 * S * (val / max_v))
+                    if bar_w > 6 * S:
+                        draw.rounded_rectangle([44 * S, (ry + 32) * S, 44 * S + bar_w, (ry + 36) * S], radius=2 * S, fill=accent)
+                    draw_fitted_text(draw, 54, ry + 8, f"#{i + 1}  {m_name}", max_size=14, min_size=10, max_width=220, fill=TEXT_WHITE)
                     val_s = format_voice_short(val) if is_voice else f"{val:,}"
-                    vw = draw.textlength(val_s, font=f_row)
-                    draw.text((362 - vw, ry + 8), val_s, fill=accent, font=f_row)
+                    draw_fitted_text(draw, 362, ry + 8, val_s, max_size=14, min_size=11, max_width=80, fill=accent, align_right=True)
             else:
-                draw.text((48, 365), "No activity in this timeframe.", fill=TEXT_DIM, font=f_lbl)
+                draw_fitted_text(draw, 48, 365, "No activity in this timeframe.", font_file="Arial.TTF", max_size=15, min_size=12, max_width=320, fill=TEXT_DIM)
 
-            # Bottom Right: Chart
             self._draw_bento_box(draw, 404, 240, 528, 292, f"Channel Activity ({days}d)", accent)
             plot_vals = [round(v / 3600.0, 2) for v in series] if is_voice else series
             plot_img = self._render_plot_image(
@@ -1162,7 +1241,7 @@ class ServerStats(commands.Cog):
                 ylabel="Hours" if is_voice else "Messages",
                 color="#3880d4" if is_voice else "#43b581",
             )
-            canvas.paste(plot_img, (418, 284))
+            canvas.paste(plot_img, (418 * S, 284 * S))
 
             out = io.BytesIO()
             canvas.save(out, format="PNG")
@@ -1229,7 +1308,7 @@ class ServerStats(commands.Cog):
         )
 
         def _draw_card() -> io.BytesIO:
-            canvas = Image.new("RGBA", (960, 560), BG_DARK)
+            canvas = Image.new("RGBA", (960 * S, 560 * S), BG_DARK)
             draw = ImageDraw.Draw(canvas)
             self._draw_header(
                 canvas,
@@ -1245,54 +1324,43 @@ class ServerStats(commands.Cog):
             self._draw_bento_box(draw, 336, 96, 288, 128, "Server Voice Time", SB_BLUE)
             self._draw_bento_box(draw, 644, 96, 288, 128, f"Population ({days}d)", SB_GOLD)
 
-            f_lbl = load_font("Arial.TTF", 15)
-            f_bold = load_font("Arial-Bold.TTF", 15)
-
-            for idx, (label, d_key) in enumerate([("24 Hours", 1), ("7 Days", 7), (f"{days} Days", days)]):
+            for idx, (label, d_key) in enumerate([("24 Hours", 1), ("7 Days", 7), (fmt_days(days), days)]):
                 yy = 142 + idx * 25
-                draw.text((46, yy), label, fill=TEXT_MUTED, font=f_lbl)
-                ms_s = f"{msg_w.get(d_key, 0):,} msgs"
-                draw.text((298 - draw.textlength(ms_s, font=f_bold), yy), ms_s, fill=TEXT_WHITE, font=f_bold)
+                draw_fitted_text(draw, 46, yy, label, font_file="Arial.TTF", max_size=15, min_size=12, max_width=110, fill=TEXT_MUTED)
+                draw_fitted_text(draw, 298, yy, fmt_msgs(msg_w.get(d_key, 0)), max_size=15, min_size=12, max_width=135, fill=TEXT_WHITE, align_right=True)
 
-                draw.text((354, yy), label, fill=TEXT_MUTED, font=f_lbl)
-                vc_s = format_voice_hours(vc_w.get(d_key, 0))
-                draw.text((606 - draw.textlength(vc_s, font=f_bold), yy), vc_s, fill=TEXT_WHITE, font=f_bold)
+                draw_fitted_text(draw, 354, yy, label, font_file="Arial.TTF", max_size=15, min_size=12, max_width=110, fill=TEXT_MUTED)
+                draw_fitted_text(draw, 606, yy, format_voice_hours(vc_w.get(d_key, 0)), max_size=15, min_size=12, max_width=135, fill=TEXT_WHITE, align_right=True)
 
-            humans = sum(1 for m in guild.members if not m.bot)
+            total_members = guild.member_count or len(guild.members)
             flow_str = f"+{joins_d:,} / -{leaves_d:,}"
             for idx, (label, val_s, col) in enumerate([
-                ("Members", f"{humans:,} humans", TEXT_WHITE),
+                ("Members", f"{total_members:,}", TEXT_WHITE),
                 ("Contributors", f"{len(active_members):,} active", SB_GREEN),
                 ("Member Flow", flow_str, SB_GOLD),
             ]):
                 yy = 142 + idx * 25
-                draw.text((662, yy), label, fill=TEXT_MUTED, font=f_lbl)
-                draw.text((914 - draw.textlength(val_s, font=f_bold), yy), val_s, fill=col, font=f_bold)
+                draw_fitted_text(draw, 662, yy, label, font_file="Arial.TTF", max_size=15, min_size=12, max_width=120, fill=TEXT_MUTED)
+                draw_fitted_text(draw, 914, yy, val_s, max_size=15, min_size=12, max_width=125, fill=col, align_right=True)
 
-            # Bottom 3 Boxes: Top Members, Top Channels, Activity Chart
             self._draw_bento_box(draw, 28, 240, 250, 292, f"Top Members ({days}d)", SB_GREEN)
             self._draw_bento_box(draw, 294, 240, 250, 292, f"Top Channels ({days}d)", SB_BLUE)
             self._draw_bento_box(draw, 560, 240, 372, 292, f"Message Activity ({days}d)", SB_GREEN)
 
-            f_row = load_font("Arial-Bold.TTF", 13)
             for i, (u_name, cnt) in enumerate(active_members[:5]):
                 ry = 286 + i * 46
-                draw.rounded_rectangle([42, ry, 264, ry + 36], radius=7, fill=CARD_INNER)
-                lbl = fit_text(draw, f"#{i + 1} {u_name}", f_row, 145)
-                draw.text((50, ry + 9), lbl, fill=TEXT_WHITE, font=f_row)
-                cs = f"{cnt:,}"
-                draw.text((256 - draw.textlength(cs, font=f_row), ry + 9), cs, fill=SB_GREEN, font=f_row)
+                draw.rounded_rectangle([42 * S, ry * S, 264 * S, (ry + 36) * S], radius=7 * S, fill=CARD_INNER)
+                draw_fitted_text(draw, 50, ry + 9, f"#{i + 1} {u_name}", max_size=13, min_size=10, max_width=145, fill=TEXT_WHITE)
+                draw_fitted_text(draw, 256, ry + 9, f"{cnt:,}", max_size=13, min_size=10, max_width=60, fill=SB_GREEN, align_right=True)
 
             for i, (c_name, cnt) in enumerate(top_channels[:5]):
                 ry = 286 + i * 46
-                draw.rounded_rectangle([308, ry, 530, ry + 36], radius=7, fill=CARD_INNER)
-                lbl = fit_text(draw, f"#{i + 1} #{c_name}", f_row, 145)
-                draw.text((316, ry + 9), lbl, fill=TEXT_WHITE, font=f_row)
-                cs = f"{cnt:,}"
-                draw.text((522 - draw.textlength(cs, font=f_row), ry + 9), cs, fill=SB_BLUE, font=f_row)
+                draw.rounded_rectangle([308 * S, ry * S, 530 * S, (ry + 36) * S], radius=7 * S, fill=CARD_INNER)
+                draw_fitted_text(draw, 316, ry + 9, f"#{i + 1} #{c_name}", max_size=13, min_size=10, max_width=145, fill=TEXT_WHITE)
+                draw_fitted_text(draw, 522, ry + 9, f"{cnt:,}", max_size=13, min_size=10, max_width=60, fill=SB_BLUE, align_right=True)
 
             plot_img = self._render_plot_image(buckets, series, width_px=348, height_px=235, ylabel="Messages")
-            canvas.paste(plot_img, (572, 284))
+            canvas.paste(plot_img, (572 * S, 284 * S))
 
             out = io.BytesIO()
             canvas.save(out, format="PNG")
@@ -1351,7 +1419,7 @@ class ServerStats(commands.Cog):
         buckets, series = await asyncio.to_thread(self._get_daily_series, guild.id, days, table=table, col=col)
 
         def _draw_card() -> io.BytesIO:
-            canvas = Image.new("RGBA", (960, 560), BG_DARK)
+            canvas = Image.new("RGBA", (960 * S, 560 * S), BG_DARK)
             draw = ImageDraw.Draw(canvas)
             accent = SB_BLUE if is_voice else SB_GREEN
             self._draw_header(
@@ -1367,53 +1435,48 @@ class ServerStats(commands.Cog):
             self._draw_bento_box(draw, 336, 96, 288, 128, "Participation", accent)
             self._draw_bento_box(draw, 644, 96, 288, 128, "Top Highlights", SB_GOLD)
 
-            f_lbl = load_font("Arial.TTF", 15)
-            f_bold = load_font("Arial-Bold.TTF", 15)
-            unit_fn = format_voice_hours if is_voice else (lambda v: f"{v:,} msgs")
+            unit_fn = format_voice_hours if is_voice else fmt_msgs
 
-            for idx, (label, d_key) in enumerate([("24 Hours", 1), ("7 Days", 7), (f"{days} Days", days)]):
+            for idx, (label, d_key) in enumerate([("24 Hours", 1), ("7 Days", 7), (fmt_days(days), days)]):
                 yy = 142 + idx * 25
-                draw.text((46, yy), label, fill=TEXT_MUTED, font=f_lbl)
-                vs = unit_fn(windows.get(d_key, 0))
-                draw.text((298 - draw.textlength(vs, font=f_bold), yy), vs, fill=TEXT_WHITE, font=f_bold)
+                draw_fitted_text(draw, 46, yy, label, font_file="Arial.TTF", max_size=15, min_size=12, max_width=110, fill=TEXT_MUTED)
+                draw_fitted_text(draw, 298, yy, unit_fn(windows.get(d_key, 0)), max_size=15, min_size=12, max_width=135, fill=TEXT_WHITE, align_right=True)
 
             peak_val = max(series, default=0)
             avg_val = int(windows.get(days, 0) / max(1, days))
             for idx, (label, vs) in enumerate([
-                ("Contributors", f"{len(users):,} members"),
+                ("Contributors", fmt_users(len(users), "member")),
                 ("Daily Average", unit_fn(avg_val)),
                 ("Peak Day", unit_fn(peak_val)),
             ]):
                 yy = 142 + idx * 25
-                draw.text((354, yy), label, fill=TEXT_MUTED, font=f_lbl)
-                draw.text((606 - draw.textlength(vs, font=f_bold), yy), vs, fill=TEXT_WHITE, font=f_bold)
+                draw_fitted_text(draw, 354, yy, label, font_file="Arial.TTF", max_size=15, min_size=12, max_width=115, fill=TEXT_MUTED)
+                draw_fitted_text(draw, 606, yy, vs, max_size=15, min_size=12, max_width=130, fill=TEXT_WHITE, align_right=True)
 
             top_u = users[0][0] if users else "None"
             top_c = f"#{channels[0][0]}" if channels else "None"
-            draw.text((662, 148), "Top Member", fill=TEXT_MUTED, font=f_lbl)
-            draw.text((914 - draw.textlength(fit_text(draw, top_u, f_bold, 145), font=f_bold), 148), fit_text(draw, top_u, f_bold, 145), fill=SB_GOLD, font=f_bold)
-            draw.text((662, 184), "Top Channel", fill=TEXT_MUTED, font=f_lbl)
-            draw.text((914 - draw.textlength(fit_text(draw, top_c, f_bold, 145), font=f_bold), 184), fit_text(draw, top_c, f_bold, 145), fill=accent, font=f_bold)
+            draw_fitted_text(draw, 662, 148, "Top Member", font_file="Arial.TTF", max_size=15, min_size=12, max_width=105, fill=TEXT_MUTED)
+            draw_fitted_text(draw, 914, 148, top_u, max_size=15, min_size=11, max_width=145, fill=SB_GOLD, align_right=True)
+            draw_fitted_text(draw, 662, 184, "Top Channel", font_file="Arial.TTF", max_size=15, min_size=12, max_width=105, fill=TEXT_MUTED)
+            draw_fitted_text(draw, 914, 184, top_c, max_size=15, min_size=11, max_width=145, fill=accent, align_right=True)
 
-            # Bottom 3 Panels
             self._draw_bento_box(draw, 28, 240, 250, 292, f"Top Members ({days}d)", accent)
             self._draw_bento_box(draw, 294, 240, 250, 292, f"Top Channels ({days}d)", accent)
             self._draw_bento_box(draw, 560, 240, 372, 292, f"Activity Graph ({days}d)", accent)
 
-            f_row = load_font("Arial-Bold.TTF", 13)
             for i, (u_name, val) in enumerate(users[:5]):
                 ry = 286 + i * 46
-                draw.rounded_rectangle([42, ry, 264, ry + 36], radius=7, fill=CARD_INNER)
-                draw.text((50, ry + 9), fit_text(draw, f"#{i + 1} {u_name}", f_row, 140), fill=TEXT_WHITE, font=f_row)
+                draw.rounded_rectangle([42 * S, ry * S, 264 * S, (ry + 36) * S], radius=7 * S, fill=CARD_INNER)
+                draw_fitted_text(draw, 50, ry + 9, f"#{i + 1} {u_name}", max_size=13, min_size=10, max_width=140, fill=TEXT_WHITE)
                 vs = format_voice_short(val) if is_voice else f"{val:,}"
-                draw.text((256 - draw.textlength(vs, font=f_row), ry + 9), vs, fill=accent, font=f_row)
+                draw_fitted_text(draw, 256, ry + 9, vs, max_size=13, min_size=10, max_width=65, fill=accent, align_right=True)
 
             for i, (c_name, val) in enumerate(channels[:5]):
                 ry = 286 + i * 46
-                draw.rounded_rectangle([308, ry, 530, ry + 36], radius=7, fill=CARD_INNER)
-                draw.text((316, ry + 9), fit_text(draw, f"#{i + 1} #{c_name}", f_row, 140), fill=TEXT_WHITE, font=f_row)
+                draw.rounded_rectangle([308 * S, ry * S, 530 * S, (ry + 36) * S], radius=7 * S, fill=CARD_INNER)
+                draw_fitted_text(draw, 316, ry + 9, f"#{i + 1} #{c_name}", max_size=13, min_size=10, max_width=140, fill=TEXT_WHITE)
                 vs = format_voice_short(val) if is_voice else f"{val:,}"
-                draw.text((522 - draw.textlength(vs, font=f_row), ry + 9), vs, fill=accent, font=f_row)
+                draw_fitted_text(draw, 522, ry + 9, vs, max_size=13, min_size=10, max_width=65, fill=accent, align_right=True)
 
             plot_vals = [round(v / 3600.0, 2) for v in series] if is_voice else series
             plot_img = self._render_plot_image(
@@ -1424,7 +1487,7 @@ class ServerStats(commands.Cog):
                 ylabel="Hours" if is_voice else "Messages",
                 color="#3880d4" if is_voice else "#43b581",
             )
-            canvas.paste(plot_img, (572, 284))
+            canvas.paste(plot_img, (572 * S, 284 * S))
 
             out = io.BytesIO()
             canvas.save(out, format="PNG")
@@ -1499,31 +1562,29 @@ class ServerStats(commands.Cog):
                 title = f"{guild.name} — {'Voice' if is_voice else 'Message'} Chart"
 
             total_raw = sum(raw_series)
-            unit_fn = format_voice_hours if is_voice else (lambda v: f"{v:,} msgs")
+            unit_fn = format_voice_hours if is_voice else fmt_msgs
             stat_1 = (f"Total ({days}d)", unit_fn(total_raw))
             stat_2 = ("Daily Average", unit_fn(int(total_raw / max(1, days))))
             stat_3 = ("Peak Day", unit_fn(max(raw_series, default=0)))
 
         def _draw_card() -> io.BytesIO:
-            canvas = Image.new("RGBA", (960, 560), BG_DARK)
+            canvas = Image.new("RGBA", (960 * S, 560 * S), BG_DARK)
             draw = ImageDraw.Draw(canvas)
             self._draw_header(
                 canvas,
                 draw,
                 title=title,
-                subtitle=f"Detailed Time-Series Chart • Lookback: {days}d • Timezone: UTC",
+                subtitle=f"Detailed Time-Series Chart • Lookback: {fmt_days(days)} • Timezone: UTC",
                 days=days,
                 icon=icon_img,
             )
 
-            # Summary Strip Boxes
             for idx, (lbl, val) in enumerate([stat_1, stat_2, stat_3]):
                 bx = 28 + idx * 308
                 self._draw_bento_box(draw, bx, 96, 288, 78)
-                draw.text((bx + 20, 110), lbl, fill=TEXT_MUTED, font=load_font("Arial.TTF", 14))
-                draw.text((bx + 20, 134), val, fill=accent, font=load_font("Arial-Bold.TTF", 22))
+                draw_fitted_text(draw, bx + 20, 110, lbl, font_file="Arial.TTF", max_size=14, min_size=11, max_width=248, fill=TEXT_MUTED)
+                draw_fitted_text(draw, bx + 20, 134, val, max_size=22, min_size=14, max_width=248, fill=accent)
 
-            # Full-Width Chart Panel
             self._draw_bento_box(draw, 28, 188, 904, 344, f"Activity Timeline ({days}d)", accent)
             plot_img = self._render_plot_image(
                 buckets,
@@ -1536,7 +1597,7 @@ class ServerStats(commands.Cog):
                 primary_label=primary_label,
                 secondary_label=secondary_label,
             )
-            canvas.paste(plot_img, (42, 234))
+            canvas.paste(plot_img, (42 * S, 234 * S))
 
             out = io.BytesIO()
             canvas.save(out, format="PNG")
@@ -1598,7 +1659,7 @@ class ServerStats(commands.Cog):
                     (guild.id, cutoff),
                 )
                 vc_channels = [
-                    (f"🔊 {guild.get_channel(cid).name}", val)
+                    (f"#{guild.get_channel(cid).name}", val)
                     for cid, val in cur.fetchall()
                     if guild.get_channel(cid) is not None and not self._is_channel_blacklisted(guild.get_channel(cid))
                 ]
@@ -1608,13 +1669,13 @@ class ServerStats(commands.Cog):
 
         if category == "overview":
             def _draw_overview() -> io.BytesIO:
-                canvas = Image.new("RGBA", (960, 560), BG_DARK)
+                canvas = Image.new("RGBA", (960 * S, 560 * S), BG_DARK)
                 draw = ImageDraw.Draw(canvas)
                 self._draw_header(
                     canvas,
                     draw,
                     title=f"Top Overview — {guild.name}",
-                    subtitle=f"Most Active Members & Channels • Lookback: {days}d",
+                    subtitle=f"Most Active Members & Channels • Lookback: {fmt_days(days)}",
                     days=days,
                     icon=icon_img,
                 )
@@ -1625,24 +1686,23 @@ class ServerStats(commands.Cog):
                     (28, 324, f"Top Voice Members ({days}d)", vc_users[:4], True, SB_BLUE),
                     (492, 324, f"Top Voice Channels ({days}d)", vc_channels[:4], True, SB_BLUE),
                 ]
-                f_row = load_font("Arial-Bold.TTF", 14)
 
                 for px, py, ptitle, items, is_vc, accent in panels:
                     self._draw_bento_box(draw, px, py, 440, 212, ptitle, accent)
                     if not items:
-                        draw.text((px + 22, py + 100), "No activity recorded yet.", fill=TEXT_DIM, font=f_row)
+                        draw_fitted_text(draw, px + 22, py + 100, "No activity recorded yet.", font_file="Arial.TTF", max_size=14, min_size=11, max_width=380, fill=TEXT_DIM)
                         continue
                     max_v = max(items[0][1], 1)
                     for i, (name, val) in enumerate(items):
                         ry = py + 48 + i * 38
-                        draw.rounded_rectangle([px + 16, ry, px + 424, ry + 32], radius=6, fill=CARD_INNER)
-                        bw = int(408 * (val / max_v))
-                        if bw > 6:
-                            draw.rounded_rectangle([px + 16, ry + 29, px + 16 + bw, ry + 32], radius=2, fill=accent)
+                        draw.rounded_rectangle([(px + 16) * S, ry * S, (px + 424) * S, (ry + 32) * S], radius=6 * S, fill=CARD_INNER)
+                        bw = int(408 * S * (val / max_v))
+                        if bw > 6 * S:
+                            draw.rounded_rectangle([(px + 16) * S, (ry + 29) * S, (px + 16) * S + bw, (ry + 32) * S], radius=2 * S, fill=accent)
                         rank_col = SB_GOLD if i == 0 else TEXT_WHITE
-                        draw.text((px + 26, ry + 6), fit_text(draw, f"#{i + 1}  {name}", f_row, 260), fill=rank_col, font=f_row)
-                        vs = format_voice_hours(val) if is_vc else f"{val:,} msgs"
-                        draw.text((px + 414 - draw.textlength(vs, font=f_row), ry + 6), vs, fill=accent, font=f_row)
+                        draw_fitted_text(draw, px + 26, ry + 6, f"#{i + 1}  {name}", max_size=14, min_size=10, max_width=270, fill=rank_col)
+                        vs = format_voice_hours(val) if is_vc else fmt_msgs(val)
+                        draw_fitted_text(draw, px + 414, ry + 6, vs, max_size=14, min_size=11, max_width=110, fill=accent, align_right=True)
 
                 out = io.BytesIO()
                 canvas.save(out, format="PNG")
@@ -1652,7 +1712,6 @@ class ServerStats(commands.Cog):
             buf = await asyncio.to_thread(_draw_overview)
             return buf, 1
 
-        # Paginated 10-row list view
         mapping = {
             "messages": ("Top Message Members", msg_users, False, SB_GREEN),
             "channels": ("Top Text Channels", msg_channels, False, SB_GREEN),
@@ -1667,21 +1726,20 @@ class ServerStats(commands.Cog):
         global_max = max(full_list[0][1], 1) if full_list else 1
 
         def _draw_list() -> io.BytesIO:
-            canvas = Image.new("RGBA", (960, 560), BG_DARK)
+            canvas = Image.new("RGBA", (960 * S, 560 * S), BG_DARK)
             draw = ImageDraw.Draw(canvas)
             self._draw_header(
                 canvas,
                 draw,
                 title=f"{title_prefix} — {guild.name}",
-                subtitle=f"Page {page + 1} of {total_pages} • Total Ranked: {len(full_list)} • Lookback: {days}d",
+                subtitle=f"Page {page + 1} of {total_pages} • Total Ranked: {len(full_list)} • Lookback: {fmt_days(days)}",
                 days=days,
                 icon=icon_img,
             )
             self._draw_bento_box(draw, 28, 96, 904, 436, f"{title_prefix} ({days}d)", accent)
-            f_row = load_font("Arial-Bold.TTF", 15)
 
             if not slice_items:
-                draw.text((54, 290), "No activity recorded for this timeframe yet.", fill=TEXT_DIM, font=f_row)
+                draw_fitted_text(draw, 54, 290, "No activity recorded for this timeframe yet.", font_file="Arial.TTF", max_size=15, min_size=12, max_width=500, fill=TEXT_DIM)
             else:
                 for idx, (name, val) in enumerate(slice_items):
                     rank_num = page * per_page + idx + 1
@@ -1690,16 +1748,16 @@ class ServerStats(commands.Cog):
                     rx = 46 + col_idx * 440
                     ry = 148 + row_idx * 72
 
-                    draw.rounded_rectangle([rx, ry, rx + 426, ry + 58], radius=10, fill=CARD_INNER)
-                    bw = int(426 * (val / global_max))
-                    if bw > 8:
-                        draw.rounded_rectangle([rx, ry + 53, rx + bw, ry + 58], radius=3, fill=accent)
+                    draw.rounded_rectangle([rx * S, ry * S, (rx + 426) * S, (ry + 58) * S], radius=10 * S, fill=CARD_INNER)
+                    bw = int(426 * S * (val / global_max))
+                    if bw > 8 * S:
+                        draw.rounded_rectangle([rx * S, (ry + 53) * S, rx * S + bw, (ry + 58) * S], radius=3 * S, fill=accent)
 
                     r_col = SB_GOLD if rank_num == 1 else ((192, 198, 206, 255) if rank_num == 2 else ((205, 127, 50, 255) if rank_num == 3 else TEXT_MUTED))
-                    draw.text((rx + 16, ry + 18), f"#{rank_num}", fill=r_col, font=load_font("Arial-Bold.TTF", 18))
-                    draw.text((rx + 68, ry + 19), fit_text(draw, name, f_row, 225), fill=TEXT_WHITE, font=f_row)
-                    vs = format_voice_hours(val) if is_vc else f"{val:,} msgs"
-                    draw.text((rx + 410 - draw.textlength(vs, font=f_row), ry + 19), vs, fill=accent, font=f_row)
+                    draw_fitted_text(draw, rx + 16, ry + 18, f"#{rank_num}", max_size=18, min_size=13, max_width=50, fill=r_col)
+                    draw_fitted_text(draw, rx + 68, ry + 19, name, max_size=15, min_size=10, max_width=235, fill=TEXT_WHITE)
+                    vs = format_voice_hours(val) if is_vc else fmt_msgs(val)
+                    draw_fitted_text(draw, rx + 410, ry + 19, vs, max_size=15, min_size=11, max_width=105, fill=accent, align_right=True)
 
             out = io.BytesIO()
             canvas.save(out, format="PNG")
