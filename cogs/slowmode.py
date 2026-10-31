@@ -5,8 +5,12 @@ import re
 class SlowmodeCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        # ADD YOUR MODERATOR/STAFF ROLE IDs HERE
-        self.ALLOWED_ROLE_IDS = [1256124924356071463]
+        # Moderator ---> Lead Moderator ---> Management
+        self.ALLOWED_ROLE_IDS = [
+            1256124924356071463,
+            1376227143545000056,
+            1272244827693650034,
+        ]
 
     def parse_slowmode_duration(self, duration_text):
         """Converts human time strings (e.g., 5s, 2m, 1h) into integers of seconds."""
@@ -32,15 +36,13 @@ class SlowmodeCog(commands.Cog):
 
     @commands.command(name="slowmode", aliases=["sm"], help="Sets or clears the channel slowmode. Usage: $sm 5s / $sm 0")
     @commands.guild_only()
-    @commands.bot_has_permissions(manage_channels=True) # Bot still needs this to perform the action
+    @commands.bot_has_permissions(manage_channels=True)
     async def slowmode(self, ctx, duration: str = None):
-        # Delete the trigger message right away
         try:
             await ctx.message.delete()
         except discord.HTTPException:
             pass
 
-        # Custom Role Check: Verify if user has an allowed role or is an Admin/Server Owner
         user_roles = [role.id for role in ctx.author.roles]
         has_bypass_role = any(role_id in self.ALLOWED_ROLE_IDS for role_id in user_roles)
         
@@ -51,7 +53,6 @@ class SlowmodeCog(commands.Cog):
             )
             return await ctx.send(embed=embed)
 
-        # If no argument is provided, display current channel status
         if duration is None:
             current_slow = ctx.channel.slowmode_delay
             if current_slow == 0:
@@ -66,7 +67,6 @@ class SlowmodeCog(commands.Cog):
                 )
             return await ctx.send(embed=embed)
 
-        # Parse time string to seconds
         seconds = self.parse_slowmode_duration(duration)
 
         if seconds is None:

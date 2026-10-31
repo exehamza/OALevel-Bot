@@ -1,24 +1,74 @@
 import datetime
+import os
 import re
 import sqlite3
+from typing import Optional
 import discord
 from discord.ext import commands
 from config import Config
-import os
+
+ROLE_MODERATOR = 1256124924356071463
+ROLE_LEAD_MOD = 1376227143545000056
+ROLE_MANAGEMENT = 1272244827693650034
+
+
+def is_mod_or_higher():
+    """Allows Moderator, Lead Moderator, Management, or Administrator."""
+    async def predicate(ctx: commands.Context) -> bool:
+        if not ctx.guild:
+            return False
+        role_ids = {r.id for r in ctx.author.roles}
+        if (
+            ROLE_MODERATOR in role_ids
+            or ROLE_LEAD_MOD in role_ids
+            or ROLE_MANAGEMENT in role_ids
+            or ctx.author.guild_permissions.administrator
+            or ctx.author == ctx.guild.owner
+        ):
+            return True
+        raise commands.MissingPermissions(["manage_messages"])
+    return commands.check(predicate)
+
+
+def is_lead_mod_or_higher():
+    """Allows ONLY Lead Moderator, Management, or Administrator (blocks regular Moderators)."""
+    async def predicate(ctx: commands.Context) -> bool:
+        if not ctx.guild:
+            return False
+        role_ids = {r.id for r in ctx.author.roles}
+        if (
+            ROLE_LEAD_MOD in role_ids
+            or ROLE_MANAGEMENT in role_ids
+            or ctx.author.guild_permissions.administrator
+            or ctx.author == ctx.guild.owner
+        ):
+            return True
+        raise commands.MissingPermissions(["ban_members"])
+    return commands.check(predicate)
+
+
+def is_management_or_admin():
+    """Allows ONLY Management or Administrator."""
+    async def predicate(ctx: commands.Context) -> bool:
+        if not ctx.guild:
+            return False
+        role_ids = {r.id for r in ctx.author.roles}
+        if (
+            ROLE_MANAGEMENT in role_ids
+            or ctx.author.guild_permissions.administrator
+            or ctx.author == ctx.guild.owner
+        ):
+            return True
+        raise commands.MissingPermissions(["administrator"])
+    return commands.check(predicate)
+
 
 class Moderation(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        
-        # 1. Get project root (cogs/moderation.py -> cogs -> Project Root)
         project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        
-        # 2. Point directly to the database inside the 'data' folder
         self.db_path = os.path.join(project_root, "data", "database.sqlite")
-        
-        # 3. Ensure the data directory exists before connecting
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
-        
         self.init_db()
 
     def init_db(self):
@@ -81,10 +131,6 @@ class Moderation(commands.Cog):
                 return
 
         if getattr(log_channel, "guild", None) != ctx.guild:
-            print(
-                f"Moderation log failed: LOG_CHANNEL_ID {Config.LOG_CHANNEL_ID} "
-                f"is not in the server '{ctx.guild.name}'."
-            )
             return
 
         embed = discord.Embed(title=title, color=color)
@@ -95,17 +141,16 @@ class Moderation(commands.Cog):
 
         try:
             await log_channel.send(embed=embed)
-        except discord.Forbidden:
-            print(f"Moderation log failed: I cannot send messages/embeds in #{getattr(log_channel, 'name', Config.LOG_CHANNEL_ID)}.")
-        except discord.HTTPException as error:
-            print(f"Moderation log failed: Discord rejected the log message. Error: {error}")
+        except (discord.Forbidden, discord.HTTPException) as error:
+            print(f"Moderation log failed: {error}")
 
     @commands.Cog.listener()
     async def on_ready(self):
         print("Moderation module loaded successfully.")
         
     @commands.command(name="removecase", aliases=["delcase", "deletecase"])
-    @commands.has_permissions(administrator=True)
+    @commands.guild_only()
+    @is_management_or_admin()
     async def remove_case(self, ctx, case_id: int):
         """Removes a moderation case from the logs using its Case ID."""
         conn = sqlite3.connect(self.db_path)
@@ -153,13 +198,15 @@ class Moderation(commands.Cog):
             fields=fields
         )
 
-    # --- LOGS / HISTORY COMMAND (WITH PAGINATION) ---
+    # --- LOGS / HISTORY COMMAND (MOD+) ---
     @commands.command(name="logs", aliases=["history", "cases"], help="Shows moderation history for a specific user.")
     @commands.guild_only()
-    @commands.has_permissions(manage_messages=True)
+    @is_mod_or_higher()
     async def logs(self, ctx, target: discord.User | discord.Member):
-        try: await ctx.message.delete()
-        except discord.HTTPException: pass
+        try:
+            await ctx.message.delete()
+        except discord.HTTPException:
+            pass
 
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
@@ -256,10 +303,10 @@ class Moderation(commands.Cog):
         if view:
             view.message = sent_message
 
-    # --- PURGE COMMAND ---
+    # --- PURGE COMMAND (MOD+) ---
     @commands.command(name="purge", aliases=["clear"], help="Purges a set number of messages from the channel, optionally filtered by user.")
     @commands.guild_only()
-    @commands.has_permissions(manage_messages=True)
+    @is_mod_or_higher()
     @commands.bot_has_permissions(manage_messages=True, read_message_history=True)
     async def purge(self, ctx, arg1: discord.Member | int = None, arg2: int = None):
         target_member = None
@@ -278,8 +325,10 @@ class Moderation(commands.Cog):
                             "`$purge [@user] [amount]`",
                 color=discord.Color.red()
             )
-            try: await ctx.message.delete()
-            except discord.HTTPException: pass
+            try:
+                await ctx.message.delete()
+            except discord.HTTPException:
+                pass
             return await ctx.send(embed=embed, delete_after=5)
 
         if amount > 100:
@@ -287,13 +336,15 @@ class Moderation(commands.Cog):
                 description="<a:Cross:1514986232294281426> **Please purge 100 messages or fewer at a time.**",
                 color=discord.Color.red()
             )
-            try: await ctx.message.delete()
-            except discord.HTTPException: pass
+            try:
+                await ctx.message.delete()
+            except discord.HTTPException:
+                pass
             return await ctx.send(embed=embed, delete_after=5)
 
-        try: 
+        try:
             await ctx.message.delete()
-        except discord.HTTPException: 
+        except discord.HTTPException:
             pass
 
         try:
@@ -342,13 +393,16 @@ class Moderation(commands.Cog):
 
         await self.send_mod_log(ctx, "Messages Purged", 0x3498db, log_fields)
 
-    # --- KICK COMMAND ---
+    # --- KICK COMMAND (MOD+) ---
     @commands.command(name="kick", help="Kicks a member from the server.")
-    @commands.has_permissions(kick_members=True)
+    @commands.guild_only()
+    @is_mod_or_higher()
     @commands.bot_has_permissions(kick_members=True)
     async def kick(self, ctx, member: discord.Member, *, reason: str = "No reason provided"):
-        try: await ctx.message.delete()
-        except discord.HTTPException: pass
+        try:
+            await ctx.message.delete()
+        except discord.HTTPException:
+            pass
 
         if member.top_role >= ctx.author.top_role and ctx.author != ctx.guild.owner:
             embed = discord.Embed(
@@ -378,11 +432,10 @@ class Moderation(commands.Cog):
         embed.timestamp = datetime.datetime.now(datetime.timezone.utc)
 
         await ctx.send(embed=embed)
-        
         await self.send_mod_log(
-            ctx, 
-            "Member Kicked", 
-            0xe67e22, 
+            ctx,
+            "Member Kicked",
+            0xe67e22,
             [
                 ("User", f"{member.mention} ({member.id})", False),
                 ("Moderator", ctx.author.mention, True),
@@ -390,13 +443,16 @@ class Moderation(commands.Cog):
             ]
         )
 
-    # --- BAN COMMAND ---
+    # --- BAN COMMAND (LEAD MOD+ ONLY) ---
     @commands.command(name="ban", help="Bans a member from the server.")
-    @commands.has_permissions(ban_members=True)
+    @commands.guild_only()
+    @is_lead_mod_or_higher()
     @commands.bot_has_permissions(ban_members=True)
     async def ban(self, ctx, member: discord.Member, *, reason: str = "No reason provided"):
-        try: await ctx.message.delete()
-        except discord.HTTPException: pass
+        try:
+            await ctx.message.delete()
+        except discord.HTTPException:
+            pass
 
         if member.top_role >= ctx.author.top_role and ctx.author != ctx.guild.owner:
             embed = discord.Embed(
@@ -437,13 +493,16 @@ class Moderation(commands.Cog):
             ],
         )
 
-    # --- UNBAN COMMAND ---
+    # --- UNBAN COMMAND (LEAD MOD+ ONLY) ---
     @commands.command(name="unban", help="Unbans a user using their username, tag, or User ID.")
-    @commands.has_permissions(ban_members=True)
+    @commands.guild_only()
+    @is_lead_mod_or_higher()
     @commands.bot_has_permissions(ban_members=True)
     async def unban(self, ctx, *, user_spec: str = None):
-        try: await ctx.message.delete()
-        except discord.HTTPException: pass
+        try:
+            await ctx.message.delete()
+        except discord.HTTPException:
+            pass
 
         if user_spec is None:
             embed = discord.Embed(
@@ -495,13 +554,16 @@ class Moderation(commands.Cog):
             ],
         )
 
-    # --- MUTE / TIMEOUT COMMAND ---
+    # --- MUTE / TIMEOUT COMMAND (MOD+) ---
     @commands.command(name="mute", aliases=["timeout"], help="Mutes a member using Discord's native timeout.")
-    @commands.has_permissions(moderate_members=True)
+    @commands.guild_only()
+    @is_mod_or_higher()
     @commands.bot_has_permissions(moderate_members=True)
     async def mute(self, ctx, member: discord.Member, duration: str, *, reason: str = "No reason provided"):
-        try: await ctx.message.delete()
-        except discord.HTTPException: pass
+        try:
+            await ctx.message.delete()
+        except discord.HTTPException:
+            pass
 
         minutes = self.parse_duration(duration)
         if minutes is None:
@@ -568,13 +630,16 @@ class Moderation(commands.Cog):
             ],
         )
 
-    # --- UNMUTE / REMOVE TIMEOUT COMMAND ---
+    # --- UNMUTE / REMOVE TIMEOUT COMMAND (MOD+) ---
     @commands.command(name="unmute", aliases=["untimeout"], help="Unmutes a member by removing their timeout.")
-    @commands.has_permissions(moderate_members=True)
+    @commands.guild_only()
+    @is_mod_or_higher()
     @commands.bot_has_permissions(moderate_members=True)
     async def unmute(self, ctx, member: discord.Member, *, reason: str = "No reason provided"):
-        try: await ctx.message.delete()
-        except discord.HTTPException: pass
+        try:
+            await ctx.message.delete()
+        except discord.HTTPException:
+            pass
 
         if not member.is_timed_out():
             embed = discord.Embed(
@@ -622,12 +687,15 @@ class Moderation(commands.Cog):
             ],
         )
         
-    # --- WARN COMMAND ---
+    # --- WARN COMMAND (MOD+) ---
     @commands.command(name="warn", help="Warns a member and logs the infraction.")
-    @commands.has_permissions(manage_messages=True)
+    @commands.guild_only()
+    @is_mod_or_higher()
     async def warn(self, ctx, member: discord.Member = None, *, reason: str = "No reason provided"):
-        try: await ctx.message.delete()
-        except discord.HTTPException: pass
+        try:
+            await ctx.message.delete()
+        except discord.HTTPException:
+            pass
 
         if member is None:
             embed = discord.Embed(
@@ -678,11 +746,12 @@ class Moderation(commands.Cog):
                 ("Moderator", ctx.author.mention, True),
                 ("Reason", reason, True),
             ],
-        )    
+        )
 
-    # --- SAY / BROADCAST COMMAND ---
+    # --- SAY / BROADCAST COMMAND (MANAGEMENT+) ---
     @commands.command(name="say", help="Makes the bot say a message. Staff only.")
-    @commands.has_permissions(administrator=True)
+    @commands.guild_only()
+    @is_management_or_admin()
     async def say(self, ctx, *, message: str):
         try:
             await ctx.message.delete()
@@ -690,21 +759,23 @@ class Moderation(commands.Cog):
             pass
         await ctx.send(message)
 
-    # --- REPLY TO MESSAGE ID COMMAND ---
-    @commands.command(name="reply", help="Makes the bot reply to a specific message ID. Staff only.")
-    @commands.has_permissions(administrator=True)
-    async def reply(self, ctx, message_id: int, *, message: str):
+    # --- UNIFIED REPLY COMMAND (MANAGEMENT+) ---
+    @commands.command(name="reply", help="Makes the bot reply to a message in the current or specified channel.")
+    @commands.guild_only()
+    @is_management_or_admin()
+    async def reply(self, ctx, channel: Optional[discord.TextChannel], message_id: int, *, message: str):
         try:
             await ctx.message.delete()
         except (discord.Forbidden, discord.NotFound):
             pass
 
+        target_channel = channel or ctx.channel
         try:
-            target_message = await ctx.channel.fetch_message(message_id)
+            target_message = await target_channel.fetch_message(message_id)
             await target_message.reply(message)
         except discord.NotFound:
             embed = discord.Embed(
-                description="<a:Cross:1514986232294281426> **Error: Could not find a message with that ID in this channel.**",
+                description="<a:Cross:1514986232294281426> **Error: Could not find a message with that ID in the target channel.**",
                 color=discord.Color.red()
             )
             await ctx.send(embed=embed, delete_after=5)
@@ -715,32 +786,8 @@ class Moderation(commands.Cog):
             )
             await ctx.send(embed=embed, delete_after=5)
 
-    # --- CROSS-CHANNEL REPLY COMMAND ---
-    @commands.command(name="reply", help="Makes the bot reply to a message in any channel without exposing staff.")
-    @commands.has_permissions(administrator=True)
-    async def reply(self, ctx, channel: discord.TextChannel, message_id: int, *, message: str):
-        try:
-            await ctx.message.delete()
-        except (discord.Forbidden, discord.NotFound):
-            pass
-
-        try:
-            target_message = await channel.fetch_message(message_id)
-            await target_message.reply(message)
-        except discord.NotFound:
-            embed = discord.Embed(
-                description="<a:Cross:1514986232294281426> **Error: Message not found in specified channel.**",
-                color=discord.Color.red()
-            )
-            await ctx.send(embed=embed, delete_after=5)
-        except discord.HTTPException:
-            embed = discord.Embed(
-                description="<a:Cross:1514986232294281426> **Failed to send reply due to an API error.**",
-                color=discord.Color.red()
-            )
-            await ctx.send(embed=embed, delete_after=5)
-
     # --- ERROR HANDLING ---
+    @remove_case.error
     @logs.error
     @purge.error
     @kick.error
@@ -748,10 +795,11 @@ class Moderation(commands.Cog):
     @unban.error
     @mute.error
     @unmute.error
+    @warn.error
     @say.error
     @reply.error
     async def mod_errors(self, ctx, error):
-        if isinstance(error, commands.MissingPermissions):
+        if isinstance(error, (commands.MissingPermissions, commands.CheckFailure)):
             embed = discord.Embed(
                 description="<a:Cross:1514986232294281426> **You do not have the required staff permissions to execute this command.**",
                 color=discord.Color.red()
@@ -790,6 +838,7 @@ class Moderation(commands.Cog):
                 await ctx.send(embed=embed)
         else:
             raise error
+
 
 async def setup(bot):
     await bot.add_cog(Moderation(bot))

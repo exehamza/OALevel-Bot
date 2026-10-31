@@ -1,7 +1,7 @@
 import discord
 from discord.ext import commands
 
-# Server Role IDs (Moderator ---> Lead Moderator ---> Management)
+# Server Role IDs (Regular Member ---> Moderator ---> Lead Moderator ---> Management)
 ROLE_MODERATOR = 1256124924356071463
 ROLE_LEAD_MOD = 1376227143545000056
 ROLE_MANAGEMENT = 1272244827693650034
@@ -14,7 +14,7 @@ PERM_MANAGEMENT = 3
 
 # Central Data Repository
 COMMAND_DATA = {
-    # --- AI ---
+    # --- AI (MANAGEMENT) ---
     "ask": {
         "category": "AI",
         "level": PERM_MANAGEMENT,
@@ -23,7 +23,7 @@ COMMAND_DATA = {
         "desc": "Asks the AI a question with LaTeX math rendering support."
     },
 
-    # --- APPLICATIONS ---
+    # --- APPLICATIONS (MANAGEMENT) ---
     "setupapps": {
         "category": "Applications",
         "level": PERM_MANAGEMENT,
@@ -32,7 +32,7 @@ COMMAND_DATA = {
         "desc": "Spawns the official staff application embed and button."
     },
 
-    # --- AUTOMESSAGE (MANAGEMENT ONLY) ---
+    # --- AUTOMESSAGE (MANAGEMENT) ---
     "automessagesetup": {
         "category": "Auto Message",
         "level": PERM_MANAGEMENT,
@@ -48,7 +48,7 @@ COMMAND_DATA = {
         "desc": "Stops automatic messages and deletes all active notice widgets."
     },
 
-    # --- AUTOMOD ---
+    # --- AUTOMOD (MANAGEMENT) ---
     "automod": {
         "category": "Auto Mod",
         "level": PERM_MANAGEMENT,
@@ -85,7 +85,7 @@ COMMAND_DATA = {
         "desc": "Toggles AutoMod chat filter immunity for a member."
     },
 
-    # --- AVATAR ---
+    # --- AVATAR (MEMBER) ---
     "avatar": {
         "category": "Avatar",
         "level": PERM_MEMBER,
@@ -94,7 +94,7 @@ COMMAND_DATA = {
         "desc": "Shows the profile picture of a user."
     },
 
-    # --- COLOR ROLE ---
+    # --- COLOR ROLE (MEMBER) ---
     "colour": {
         "category": "Color Role",
         "level": PERM_MEMBER,
@@ -103,7 +103,7 @@ COMMAND_DATA = {
         "desc": "Opens the dropdown menu to select or remove your custom name color."
     },
 
-    # --- CONFESSIONS ---
+    # --- CONFESSIONS (MANAGEMENT) ---
     "setupconfessions": {
         "category": "Confessions",
         "level": PERM_MANAGEMENT,
@@ -112,7 +112,7 @@ COMMAND_DATA = {
         "desc": "Spawns the anonymous confession submission prompt in the confession channel."
     },
 
-    # --- ECONOMY: GENERAL, SHOP & CRIMES ---
+    # --- ECONOMY: GENERAL, SHOP & CRIMES (MEMBER) ---
     "balance": {
         "category": "Economy",
         "level": PERM_MEMBER,
@@ -219,7 +219,7 @@ COMMAND_DATA = {
         "desc": "Withdraws nodes from your secure bank back into your liquid wallet."
     },
 
-    # --- ECONOMY: MANAGEMENT ---
+    # --- ECONOMY MANAGEMENT (MANAGEMENT) ---
     "addnodes": {
         "category": "Economy Management",
         "level": PERM_MANAGEMENT,
@@ -284,7 +284,7 @@ COMMAND_DATA = {
         "desc": "Sets a member's liquid wallet and secure bank balances directly."
     },
 
-    # --- GAMES ---
+    # --- GAMES (MEMBER) ---
     "coinflip": {
         "category": "Games",
         "level": PERM_MEMBER,
@@ -300,7 +300,7 @@ COMMAND_DATA = {
         "desc": "Plays the slot machine with a node bet."
     },
 
-    # --- KEYWORDS ---
+    # --- KEYWORDS (MANAGEMENT) ---
     "keyword": {
         "category": "Keywords",
         "level": PERM_MANAGEMENT,
@@ -330,7 +330,7 @@ COMMAND_DATA = {
         "desc": "Displays all saved keyword triggers and responses with pagination."
     },
 
-    # --- LEVELS ---
+    # --- LEVELS (MEMBER / MANAGEMENT) ---
     "leaderboard": {
         "category": "Levels",
         "level": PERM_MEMBER,
@@ -367,7 +367,7 @@ COMMAND_DATA = {
         "desc": "Removes XP points from a member and updates their level."
     },
 
-    # --- LOCKIN ---
+    # --- LOCKIN (MEMBER) ---
     "lockin": {
         "category": "Lockin",
         "level": PERM_MEMBER,
@@ -376,10 +376,10 @@ COMMAND_DATA = {
         "desc": "Times yourself out for a set duration (10m to 24h) to focus on studying."
     },
 
-    # --- MODERATION ---
+    # --- MODERATION (MOD / LEAD MOD / MANAGEMENT) ---
     "ban": {
         "category": "Moderation",
-        "level": PERM_MOD,
+        "level": PERM_LEAD_MOD,
         "aliases": [],
         "usage": "<@member> [reason]",
         "desc": "Permanently bans a member from the server and logs the case."
@@ -442,7 +442,7 @@ COMMAND_DATA = {
     },
     "unban": {
         "category": "Moderation",
-        "level": PERM_MOD,
+        "level": PERM_LEAD_MOD,
         "aliases": [],
         "usage": "<username|ID>",
         "desc": "Removes a server ban from a user by their username, tag, or User ID."
@@ -499,7 +499,7 @@ COMMAND_DATA = {
         "desc": "Lists all users currently blacklisted from opening modmail tickets."
     },
 
-    # --- NICKNAME ---
+    # --- NICKNAME (MOD) ---
     "sn": {
         "category": "Nickname",
         "level": PERM_MOD,
@@ -508,7 +508,7 @@ COMMAND_DATA = {
         "desc": "Changes a member's nickname, or resets it if no nickname is given."
     },
 
-    # --- REPUTATION ---
+    # --- REPUTATION (MEMBER / MANAGEMENT) ---
     "rep": {
         "category": "Reputation",
         "level": PERM_MEMBER,
@@ -531,7 +531,7 @@ COMMAND_DATA = {
         "desc": "Sets a member's reputation points to a specific amount."
     },
 
-    # --- RULES ---
+    # --- RULES (MEMBER / MANAGEMENT) ---
     "rule": {
         "category": "Rules",
         "level": PERM_MEMBER,
@@ -547,7 +547,7 @@ COMMAND_DATA = {
         "desc": "Posts the complete server rules embed in the current channel."
     },
 
-    # --- SERVER STATISTICS (STATBOT) ---
+    # --- SERVER STATISTICS (MEMBER) ---
     "channel": {
         "category": "Server Statistics",
         "level": PERM_MEMBER,
@@ -598,7 +598,7 @@ COMMAND_DATA = {
         "desc": "See a user's stats in this server."
     },
 
-    # --- SLOWMODE ---
+    # --- SLOWMODE (MOD) ---
     "slowmode": {
         "category": "Slowmode",
         "level": PERM_MOD,
@@ -607,7 +607,7 @@ COMMAND_DATA = {
         "desc": "Checks, sets (e.g., 5s, 2m, 1h), or disables (0) the channel slowmode."
     },
 
-    # --- TRANSLATE ---
+    # --- TRANSLATE (MEMBER) ---
     "langs": {
         "category": "Translate",
         "level": PERM_MEMBER,
@@ -623,7 +623,7 @@ COMMAND_DATA = {
         "desc": "Translates the message you replied to into the specified target language."
     },
 
-    # --- UTILITY ---
+    # --- UTILITY (MANAGEMENT) ---
     "botstatus": {
         "category": "Utility",
         "level": PERM_MANAGEMENT,
@@ -659,9 +659,10 @@ class HelpCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.bot.remove_command("help")
+        self.cross = "<a:Cross:1514986232294281426>"
 
     def get_user_level(self, ctx: commands.Context) -> int:
-        """Determines the user's permission level based on the server role hierarchy."""
+        """Determines the user's permission level strictly by the role hierarchy."""
         if not ctx.guild:
             return PERM_MEMBER
 
@@ -681,27 +682,21 @@ class HelpCog(commands.Cog):
             return PERM_LEAD_MOD
 
         # 3. Regular Moderator (1256124924356071463)
-        if (
-            ROLE_MODERATOR in role_ids
-            or perms.manage_messages
-            or perms.kick_members
-            or perms.ban_members
-            or perms.moderate_members
-            or perms.manage_nicknames
-        ):
+        if ROLE_MODERATOR in role_ids:
             return PERM_MOD
 
+        # 4. Regular Member
         return PERM_MEMBER
 
     def find_command_entry(self, query: str):
         """Finds a command in COMMAND_DATA by exact name, alias, or parent+subcommand alias."""
-        query = query.lower().strip()
+        query = " ".join(query.lower().strip().split())
 
         for name, data in COMMAND_DATA.items():
             if query == name or query in data.get("aliases", []):
                 return name, data
 
-        parts = query.split()
+        parts = query.split(" ", 1)
         if len(parts) == 2:
             parent_q, sub_q = parts[0], parts[1]
             resolved_parent = parent_q
@@ -731,14 +726,21 @@ class HelpCog(commands.Cog):
 
             target_name, target_info = self.find_command_entry(query)
 
-            if not target_info or target_info["level"] > user_level:
+            # Command does not exist at all
+            if not target_info:
                 embed = discord.Embed(
-                    title="Error",
-                    description=f"Command `{query}` was not found or you do not have permission to view it.",
+                    description=f"{self.cross} Command `{query}` was not found.",
                     color=discord.Color.red()
                 )
-                await ctx.send(embed=embed)
-                return
+                return await ctx.send(embed=embed)
+
+            # Command exists, but user cannot view it in their tier
+            if target_info["level"] > user_level:
+                embed = discord.Embed(
+                    description=f"{self.cross} You are not eligible to view the description of this command",
+                    color=discord.Color.red()
+                )
+                return await ctx.send(embed=embed)
 
             embed = discord.Embed(
                 title=f"Command: {prefix}{target_name}",
